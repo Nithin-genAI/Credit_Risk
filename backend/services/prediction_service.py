@@ -3,6 +3,7 @@ from pathlib import Path
 import joblib
 import pandas as pd
 import numpy as np
+import shap
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -73,6 +74,13 @@ class PredictionService:
             MODEL_DIR / "baseline_preprocessor.joblib"
         )
 
+        self.explainer = shap.TreeExplainer(
+            self.model
+        )
+        self.feature_names = (
+            self.preprocessor.get_feature_names_out()
+        )
+
         # Recover the exact raw columns expected by the
         # preprocessing pipeline.
         self.expected_columns = []
@@ -105,7 +113,7 @@ class PredictionService:
         # Insert whatever applicant data was supplied.
         for column, value in clean_data.items():
             if column in row:
-                row[column] = value
+                row[column] = np.nan if value is None else value
 
         df = pd.DataFrame([row])
 
@@ -133,6 +141,40 @@ class PredictionService:
         )
 
         return probability, X_processed
+
+    def explain(self, applicant: dict, top_n: int = 5):
+
+        df = self.prepare_input(applicant)
+        X_processed = self.preprocessor.transform(df)
+        shap_values = self.explainer.shap_values(
+            X_processed
+        )
+
+        # For a single applicant
+        values = shap_values[0]
+
+        # Find strongest contributors
+        importance = np.abs(values)
+        top_indices = np.argsort(
+            importance
+        )[::-1][:top_n]
+
+        factors = []
+        for index in top_indices:
+            factors.append({
+                "feature": self.feature_names[index],
+                "impact": (
+                    "increases_risk"
+                    if values[index] > 0
+                    else "decreases_risk"
+                ),
+                "shap_value": round(
+                    float(values[index]),
+                    5
+                )
+            })
+
+        return factors
 
 
 prediction_service = PredictionService()

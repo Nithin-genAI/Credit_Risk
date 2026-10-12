@@ -76,8 +76,13 @@ def health_check():
 def predict(applicant: ApplicantInput):
 
     try:
+        applicant_data = applicant.model_dump()
         probability, _ = prediction_service.predict(
-            applicant.model_dump()
+            applicant_data
+        )
+        factors = prediction_service.explain(
+            applicant_data,
+            top_n=5
         )
 
         # MVP risk bands.
@@ -99,7 +104,8 @@ def predict(applicant: ApplicantInput):
                 4
             ),
             "risk_level": risk_level,
-            "model_version": "baseline-v1"
+            "model_version": "baseline-v1",
+            "top_factors": factors
         }
 
     except Exception as e:
