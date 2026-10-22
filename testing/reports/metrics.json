@@ -1,0 +1,133 @@
+{
+  "evaluation_type": "secondary diagnostic only; not an independent final test",
+  "positive_class": 1,
+  "positive_class_meaning": "TARGET=1 (payment difficulty/default)",
+  "source_dataset": {
+    "path": "data\\application_train.csv",
+    "sha256": "52e96b895b1112e1c853f670e58372719c8441c5ed1c57ac2f7fad559d784f5f",
+    "row_count": 307511,
+    "target_counts": {
+      "0": 282686,
+      "1": 24825
+    }
+  },
+  "original_split": {
+    "settings": {
+      "test_size": 0.2,
+      "random_state": 42,
+      "stratify": "TARGET"
+    },
+    "training_rows": 246008,
+    "validation_rows": 61503,
+    "training_target_counts": {
+      "0": 226148,
+      "1": 19860
+    },
+    "validation_target_counts": {
+      "0": 56538,
+      "1": 4965
+    }
+  },
+  "diagnostic_split": {
+    "settings": {
+      "validation_fraction": 0.5,
+      "secondary_holdout_fraction": 0.5,
+      "random_state": 42,
+      "stratify": "TARGET"
+    },
+    "membership_file": "validation_partition_membership.csv"
+  },
+  "feature_alignment": {
+    "raw_features_before_encoding": 130,
+    "transformed_feature_count": 254,
+    "model_input_feature_count": 254,
+    "saved_model_classes": [
+      0,
+      1
+    ],
+    "preprocessor_numeric_features": 114,
+    "preprocessor_categorical_features": 16
+  },
+  "classification_threshold": 0.5,
+  "diagnostic_partitions": {
+    "diagnostic_validation": {
+      "record_count": 30751,
+      "target_counts": {
+        "0": 28269,
+        "1": 2482
+      },
+      "classification_threshold": 0.5,
+      "roc_auc": 0.767923288720209,
+      "average_precision": 0.2596172369339389,
+      "precision": 0.5371900826446281,
+      "recall": 0.026188557614826753,
+      "f1": 0.049942374183634265,
+      "confusion_matrix": {
+        "labels": [
+          0,
+          1
+        ],
+        "layout": "[[TN, FP], [FN, TP]]",
+        "values": [
+          [
+            28213,
+            56
+          ],
+          [
+            2417,
+            65
+          ]
+        ]
+      },
+      "source_row_index_sha256": "24ca5c16d85e6d7323f07a0abae45d9d7c5f80d45b354520a8ace149dfe64b82"
+    },
+    "secondary_holdout_diagnostic": {
+      "record_count": 30752,
+      "target_counts": {
+        "0": 28269,
+        "1": 2483
+      },
+      "classification_threshold": 0.5,
+      "roc_auc": 0.7720341471747882,
+      "average_precision": 0.26119887367895145,
+      "precision": 0.5537190082644629,
+      "recall": 0.02698348771647201,
+      "f1": 0.05145929339477726,
+      "confusion_matrix": {
+        "labels": [
+          0,
+          1
+        ],
+        "layout": "[[TN, FP], [FN, TP]]",
+        "values": [
+          [
+            28215,
+            54
+          ],
+          [
+            2416,
+            67
+          ]
+        ]
+      },
+      "source_row_index_sha256": "11e0649dcf600039bb63dbdd584b9201a9c2a2b038dc0a520b1bd0b94d823f84"
+    }
+  },
+  "checks": {
+    "reconstructed_split_matches_notebook_row_counts": true,
+    "training_and_validation_partitions_are_disjoint": true,
+    "diagnostic_subsets_are_disjoint_and_cover_validation": true,
+    "TARGET_excluded_from_model_features": true,
+    "SK_ID_CURR_excluded_from_model_features": true,
+    "saved_preprocessor_schema_matches_feature_metadata": true,
+    "transformed_feature_order_and_width_match_saved_model": true,
+    "prediction_and_label_rows_are_aligned": true,
+    "complete_benchmark_features_used_without_all_missing_fallback": true
+  },
+  "runtime_versions": {
+    "python": "3.13.14",
+    "pandas": "3.0.5",
+    "scikit_learn": "1.9.0",
+    "xgboost": "3.4.0"
+  }
+}
