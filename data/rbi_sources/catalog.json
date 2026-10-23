@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "description": "Allowlisted official RBI references for the initial assistant corpus. Verify source updates before operational compliance use.",
+  "sources": [
+    {
+      "source_id": "rbi-kyc-master-direction-2016",
+      "title": "Master Direction - Know Your Customer (KYC) Direction, 2016",
+      "url": "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=11566",
+      "issued_on": "2016-02-25",
+      "updated_as_of": "2025-08-14",
+      "currentness_status": "consolidated_as_of_source_update",
+      "status_note": "The official RBI page lists an update as of 14 August 2025. This corpus does not establish whether later amendments were issued; verify the current RBI page before relying on it.",
+      "topics": [
+        "kyc",
+        "customer-identification",
+        "loan-applicants"
+      ],
+      "keywords": [
+        "identity checks",
+        "customer due diligence",
+        "identity verification",
+        "proof of identity",
+        "know your customer"
+      ]
+    },
+    {
+      "source_id": "rbi-digital-lending-guidelines-2022",
+      "title": "Guidelines on Digital Lending",
+      "url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12382&Mode=0",
+      "issued_on": "2022-09-02",
+      "updated_as_of": null,
+      "currentness_status": "historical_currentness_unverified",
+      "status_note": "Official 2022 circular. Later directions or amendments may affect applicability. Do not present this circular alone as the current consolidated requirements.",
+      "topics": [
+        "digital-lending",
+        "borrower-protection",
+        "loan-applicants"
+      ],
+      "keywords": [
+        "digital loan",
+        "loan service provider",
+        "key facts statement",
+        "cooling off period",
+        "disbursement",
+        "borrower consent"
+      ]
+    },
+    {
+      "source_id": "rbi-responsible-lending-document-release-2023",
+      "title": "Responsible Lending Conduct - Release of Movable / Immovable Property Documents on Repayment / Settlement of Personal Loans",
+      "url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12535&Mode=0",
+      "issued_on": "2023-09-13",
+      "updated_as_of": null,
+      "currentness_status": "specific_circular_currentness_unverified",
+      "status_note": "Official RBI circular with stated applicability to specified regulated entities. Verify the current consolidated directions and entity/product applicability before operational use.",
+      "topics": [
+        "fair-practices",
+        "responsible-lending",
+        "borrower-rights"
+      ],
+      "keywords": [
+        "return property documents",
+        "release collateral",
+        "loan repayment",
+        "thirty days",
+        "no dues",
+        "lien removal"
+      ]
+    }
+  ]
+}
