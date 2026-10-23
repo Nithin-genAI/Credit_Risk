@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 import requests
 
-from frontend.api_client import APIError, _json_request, sanitize_batch_csv
+from frontend.api_client import (
+    APIError,
+    _json_request,
+    applicant_record_from_mapping,
+    encode_batch_frame,
+    sanitize_batch_csv,
+)
 
 
 def test_batch_sanitizer_removes_target_and_unknown_columns():
@@ -21,10 +27,44 @@ def test_batch_sanitizer_removes_target_and_unknown_columns():
     payload, target_removed, dropped = sanitize_batch_csv(frame)
 
     assert target_removed == 1
-    assert dropped == ["TARGET", "SK_ID_CURR"]
+    assert dropped == ["TARGET"]
     assert b"TARGET" not in payload
-    assert b"SK_ID_CURR" not in payload
+    assert b"SK_ID_CURR" in payload
     assert b"AMT_CREDIT" in payload
+
+
+def test_explanation_record_keeps_only_model_fields_and_excludes_target():
+    applicant = applicant_record_from_mapping(
+        {
+            "Application ID": "APP-1",
+            "AMT_INCOME_TOTAL": 100000,
+            "DAYS_BIRTH": -12000,
+            "TARGET": 1,
+            "UNSUPPORTED": "ignore",
+            "SK_ID_CURR": 123,
+        }
+    )
+
+    assert applicant == {
+        "AMT_INCOME_TOTAL": 100000,
+        "DAYS_BIRTH": -12000,
+    }
+
+
+def test_xlsx_serializer_preserves_upload_extension():
+    frame = pd.DataFrame(
+        {
+            "application_id": ["APP-1"],
+            "AMT_INCOME_TOTAL": [100000],
+            "AMT_CREDIT": [200000],
+            "DAYS_BIRTH": [-12000],
+        }
+    )
+
+    content, filename = encode_batch_frame(frame, "applications.xlsx")
+
+    assert filename == "applications.xlsx"
+    assert content[:2] == b"PK"
 
 
 def test_batch_sanitizer_requires_backend_required_columns():
