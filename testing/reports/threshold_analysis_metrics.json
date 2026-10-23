@@ -1,0 +1,146 @@
+{
+  "evaluation_type": "threshold analysis on secondary diagnostics; not an independent final test",
+  "target": "TARGET=1 (payment difficulty/default)",
+  "thresholds_compared": [
+    0.05,
+    0.1,
+    0.15,
+    0.2,
+    0.3,
+    0.5
+  ],
+  "candidate_selection": {
+    "method": "maximum F1 on diagnostic_validation; ties choose higher threshold",
+    "business_objective_defined": false,
+    "not_an_approved_decision_policy": true,
+    "threshold": 0.15,
+    "precision": 0.2492628713994103,
+    "recall": 0.4427880741337631,
+    "f1": 0.31896676824844,
+    "true_positives": 1099,
+    "false_positives": 3310,
+    "true_negatives": 24959,
+    "false_negatives": 1383,
+    "predicted_positive_count": 4409
+  },
+  "partition_sizes": {
+    "diagnostic_validation": 30751,
+    "secondary_holdout_diagnostic": 30752
+  },
+  "target_counts": {
+    "diagnostic_validation": {
+      "0": 28269,
+      "1": 2482
+    },
+    "secondary_holdout_diagnostic": {
+      "0": 28269,
+      "1": 2483
+    }
+  },
+  "diagnostic_validation_average_precision": 0.2596172369339389,
+  "diagnostic_validation_threshold_metrics": [
+    {
+      "threshold": 0.05,
+      "precision": 0.13364173734258544,
+      "recall": 0.8380338436744561,
+      "f1": 0.2305219993350327,
+      "true_positives": 2080,
+      "false_positives": 13484,
+      "true_negatives": 14785,
+      "false_negatives": 402,
+      "predicted_positive_count": 15564
+    },
+    {
+      "threshold": 0.1,
+      "precision": 0.1956633970056789,
+      "recall": 0.6107977437550363,
+      "f1": 0.29638318670576735,
+      "true_positives": 1516,
+      "false_positives": 6232,
+      "true_negatives": 22037,
+      "false_negatives": 966,
+      "predicted_positive_count": 7748
+    },
+    {
+      "threshold": 0.15,
+      "precision": 0.2492628713994103,
+      "recall": 0.4427880741337631,
+      "f1": 0.31896676824844,
+      "true_positives": 1099,
+      "false_positives": 3310,
+      "true_negatives": 24959,
+      "false_negatives": 1383,
+      "predicted_positive_count": 4409
+    },
+    {
+      "threshold": 0.2,
+      "precision": 0.2985354862936538,
+      "recall": 0.3203062046736503,
+      "f1": 0.30903790087463556,
+      "true_positives": 795,
+      "false_positives": 1868,
+      "true_negatives": 26401,
+      "false_negatives": 1687,
+      "predicted_positive_count": 2663
+    },
+    {
+      "threshold": 0.3,
+      "precision": 0.39880952380952384,
+      "recall": 0.16196615632554393,
+      "f1": 0.2303724928366762,
+      "true_positives": 402,
+      "false_positives": 606,
+      "true_negatives": 27663,
+      "false_negatives": 2080,
+      "predicted_positive_count": 1008
+    },
+    {
+      "threshold": 0.5,
+      "precision": 0.5371900826446281,
+      "recall": 0.026188557614826753,
+      "f1": 0.049942374183634265,
+      "true_positives": 65,
+      "false_positives": 56,
+      "true_negatives": 28213,
+      "false_negatives": 2417,
+      "predicted_positive_count": 121
+    }
+  ],
+  "secondary_holdout_candidate_metrics": {
+    "threshold": 0.15,
+    "precision": 0.2559209013566337,
+    "recall": 0.4482480869915425,
+    "f1": 0.32581967213114754,
+    "true_positives": 1113,
+    "false_positives": 3236,
+    "true_negatives": 25033,
+    "false_negatives": 1370,
+    "predicted_positive_count": 4349,
+    "partition": "secondary_holdout_diagnostic"
+  },
+  "files": {
+    "report": "threshold_analysis_report.md",
+    "threshold_table": "threshold_comparison.csv",
+    "precision_recall_curve_data": "precision_recall_curve.csv",
+    "precision_recall_curve_svg": "precision_recall_curve.svg"
+  },
+  "checks": {
+    "source_dataset_matches_existing_evaluation_hash": true,
+    "partition_membership_matches_existing_evaluation": true,
+    "partition_labels_and_source_ids_match_dataset": true,
+    "TARGET_excluded_from_model_inputs": true,
+    "saved_preprocessor_schema_matches_metadata": true,
+    "transformed_feature_width_matches_model": true,
+    "complete_benchmark_rows_used": true,
+    "probability_and_label_alignment_verified": true,
+    "diagnostic_only_threshold_candidate_selection": true,
+    "model_artifact_unchanged": true,
+    "preprocessor_artifact_unchanged": true
+  },
+  "limitations": [
+    "The original validation partition influenced early stopping.",
+    "Neither diagnostic subset is an independent final test.",
+    "The secondary subset is not used to select the candidate threshold.",
+    "No business objective was supplied; no threshold is declared optimal."
+  ]
+}
