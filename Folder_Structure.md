@@ -39,10 +39,17 @@ Credit_Risk/
 |   |-- __init__.py                           # Makes diagnostics importable for tests
 |   |-- evaluate_saved_baseline.py            # Reconstructs validation split and diagnoses saved model
 |   |-- test_evaluate_saved_baseline.py       # Verifies generated diagnostic outputs and alignment
-|   `-- reports/                              # Created by the evaluator; not model artifacts
+|   |-- analyze_thresholds.py                 # Compares fixed cutoffs on diagnostic validation
+|   |-- test_analyze_thresholds.py            # Tests threshold metrics and candidate selection
+|   `-- reports/                              # Generated evaluation outputs; not model artifacts
 |       |-- metrics.json                      # Machine-readable partition metrics and checks
 |       |-- evaluation_report.md              # Human-readable results, method, and limitations
-|       `-- validation_partition_membership.csv # Original validation row IDs, labels, and subset
+|       |-- validation_partition_membership.csv # Original validation row IDs, labels, and subset
+|       |-- threshold_analysis_metrics.json   # Threshold metrics and selected candidate
+|       |-- threshold_analysis_report.md      # Trade-offs and provisional holdout check
+|       |-- threshold_comparison.csv          # Metrics for each requested threshold
+|       |-- precision_recall_curve.csv        # Curve coordinates for diagnostic validation
+|       `-- precision_recall_curve.svg        # Precision-recall curve with cutoff markers
 |-- .gitattributes                          # Git file-handling rules
 |-- .gitignore                              # Files and generated artifacts excluded from Git
 |-- data_summary.txt                        # Dataset notes and summary
@@ -70,6 +77,12 @@ stratified diagnostic subsets, and writes metrics and row membership under
 test estimate, because the original validation partition influenced early
 stopping. Running `python testing/evaluate_saved_baseline.py` does not retrain
 the model or overwrite its artifacts.
+
+`testing/analyze_thresholds.py` compares the requested fixed cutoffs using
+predictions from the same saved model and exact diagnostic partitions. It picks
+a candidate only from diagnostic-validation F1 and evaluates that candidate
+once on the secondary subset as a provisional check. It does not overwrite the
+baseline evaluation outputs or define an approved business threshold.
 
 Generated environments and caches (for example `.venv/`, `__pycache__/`, and
 `.git/`) are intentionally omitted from this guide.
