@@ -5,20 +5,31 @@ Credit_Risk/
 |-- .streamlit/
 |   `-- config.toml                         # Streamlit theme and app configuration
 |-- backend/
-|   |-- main.py                             # FastAPI routes for health, single, and batch predictions
-|   |-- schemas.py                          # Applicant request schema and field validation
+|   |-- main.py                             # Health, validation, batch, explain, and RBI API routes
+|   |-- schemas.py                          # Request and response schema validation
+|   |-- settings.py                         # Threshold, upload, LLM, and query configuration
 |   |-- services/
-|   |   `-- prediction_service.py           # Loads model artifacts, prepares inputs, predicts, and explains
+|   |   |-- prediction_service.py           # Loads artifacts, prepares inputs, predicts, and explains
+|   |   |-- batch_inference.py              # CSV/XLSX contract checks and aligned batch scoring
+|   |   |-- llm_client.py                   # Optional backend-only OpenAI-compatible LLM client
+|   |   `-- rbi_assistant.py                # RBI excerpt retrieval, citations, and abstention
 |   `-- tests/
-|       `-- test_api.py                     # API behavior tests
+|       |-- test_api.py                     # API and batch behavior tests
+|       `-- test_assistants.py              # RBI evidence and citation behavior tests
 |-- data/
 |   |-- application_train.csv               # Home Credit benchmark training dataset
-|   `-- demo_applicants.csv                 # Fixed-seed sample applicants for repeatable UI demos
+|   |-- application_test.csv                # Home Credit benchmark inference dataset
+|   |-- application_test1.csv               # First 100 source rows for batch inference
+|   |-- application_test2.csv               # Next 100 source rows for batch inference
+|   |-- demo_applicants.csv                 # Fixed-seed sample applicants for repeatable demos
+|   `-- rbi_sources/
+|       |-- catalog.json                    # Allowlisted official RBI references and status notes
+|       `-- index.jsonl                     # Generated local excerpts; rebuild with the ingest script
 |-- frontend/
-|   |-- app.py                              # Streamlit dashboard and assessment pages
+|   |-- app.py                              # Overview, batch review, explanations, and RBI assistant
 |   |-- api_client.py                       # Frontend calls and validation for the FastAPI service
 |   `-- tests/
-|       `-- test_api_client.py              # API client and batch-input tests
+|       `-- test_api_client.py              # API client and upload preparation tests
 |-- models/
 |   |-- baseline_xgboost.joblib             # Trained V1 XGBoost classifier
 |   |-- baseline_preprocessor.joblib        # Saved preprocessing pipeline used during training
@@ -27,7 +38,9 @@ Credit_Risk/
 |   |-- baseline_shap_importance.csv        # Global SHAP feature importance values
 |   `-- reference_distribution.json         # Reference feature distributions for future monitoring
 |-- scripts/
-|   `-- create_demo_applicants.py           # Rebuilds demo_applicants.csv reproducibly
+|   |-- create_demo_applicants.py           # Rebuilds demo_applicants.csv reproducibly
+|   |-- split_application_test.py           # Creates two consecutive 100-row test batches
+|   `-- ingest_rbi_sources.py               # Builds the local index from allowlisted RBI pages
 |-- training_notebooks/
 |   |-- 01_understanding_data.ipynb         # Initial dataset understanding
 |   |-- 02_eda.ipynb                        # Exploratory data analysis
@@ -62,13 +75,28 @@ Credit_Risk/
 
 The Streamlit app in `frontend/` sends applicant requests to the FastAPI service
 in `backend/`; the backend uses the saved preprocessor and XGBoost model in
-`models/` to produce risk predictions and SHAP explanations. The notebooks
-document the model-development workflow, while `data/demo_applicants.csv` and
-its generator script provide repeatable benchmark examples for trying the UI.
+`models/` to produce risk predictions and SHAP explanations. Batch schema
+validation and inference run in the backend. The notebooks document model
+development, while `data/demo_applicants.csv` provides repeatable benchmark
+examples for trying the UI.
 
 The demo records are sampled from the Home Credit benchmark dataset. They are
 not verified real-world bank applications. Drift monitoring and automatic
 retraining are not implemented.
+
+To prepare two manageable inference batches from the unlabeled test dataset, run
+`python scripts/split_application_test.py`. It writes the first 100 source rows
+to `data/application_test1.csv` and the next 100 to
+`data/application_test2.csv`, preserving the original columns. The files can
+then be uploaded separately in Application Review. These are inference examples;
+the unlabeled test dataset cannot provide accuracy or other label-based metrics.
+
+The RBI assistant uses the fixed allowlist in `data/rbi_sources/catalog.json`.
+Run `python scripts/ingest_rbi_sources.py` to fetch official pages and create
+the local excerpt index. The generated `index.jsonl` is ignored by Git and is
+not available until ingestion succeeds; the assistant abstains without it.
+Source date and currentness notes are shown with citations. A locally indexed
+historical circular is not treated as proof of current applicability.
 
 The `testing/` diagnostic uses the existing saved model and preprocessor. It
 reconstructs the notebook split, divides the original validation rows into
