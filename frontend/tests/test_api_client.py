@@ -7,7 +7,9 @@ import requests
 from frontend.api_client import (
     APIError,
     _json_request,
+    applicant_chat_context_key,
     applicant_record_from_mapping,
+    chat_about_applicant,
     encode_batch_frame,
     sanitize_batch_csv,
 )
@@ -123,3 +125,65 @@ def test_json_request_rejects_non_object_payload(monkeypatch):
 
     with pytest.raises(APIError, match="JSON object"):
         _json_request("GET", "http://api.test/health")
+
+
+def test_applicant_chat_context_keys_are_record_specific():
+    first = applicant_chat_context_key(
+        "APP-1",
+        {"AMT_INCOME_TOTAL": 100000, "DAYS_BIRTH": -12000},
+    )
+    second = applicant_chat_context_key(
+        "APP-2",
+        {"AMT_INCOME_TOTAL": 100000, "DAYS_BIRTH": -12000},
+    )
+    changed_record = applicant_chat_context_key(
+        "APP-1",
+        {"AMT_INCOME_TOTAL": 120000, "DAYS_BIRTH": -12000},
+    )
+
+    assert first != second
+    assert first != changed_record
+    assert first == applicant_chat_context_key(
+        "APP-1",
+        {"DAYS_BIRTH": -12000, "AMT_INCOME_TOTAL": 100000},
+    )
+
+
+def test_applicant_chat_client_excludes_identifiers_and_target(monkeypatch):
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "answer": "Local evidence answer.",
+        "answer_status": "local_evidence_only",
+        "evidence": {"top_factors": []},
+    }
+    request = Mock(return_value=response)
+    monkeypatch.setattr("frontend.api_client.requests.request", request)
+
+    result = chat_about_applicant(
+        "http://api.test",
+        {
+            "application_id": "PRIVATE-ID",
+            "name": "PRIVATE-NAME",
+            "AMT_INCOME_TOTAL": 100000,
+            "AMT_CREDIT": 200000,
+            "DAYS_BIRTH": -12000,
+            "TARGET": 1,
+            "UNSUPPORTED": "discard",
+        },
+        "Why did this happen?",
+        "applicant",
+        history=[{"role": "user", "content": "Earlier question"}],
+    )
+
+    sent = request.call_args.kwargs["json"]
+    assert result["answer_status"] == "local_evidence_only"
+    assert set(sent["applicant"]) == {
+        "AMT_INCOME_TOTAL",
+        "AMT_CREDIT",
+        "DAYS_BIRTH",
+    }
+    assert "PRIVATE-ID" not in str(sent)
+    assert "PRIVATE-NAME" not in str(sent)
+    assert "TARGET" not in str(sent)
+    assert sent["history"] == [{"role": "user", "content": "Earlier question"}]

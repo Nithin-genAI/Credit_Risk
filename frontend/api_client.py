@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -202,6 +203,53 @@ def explain_applicant(
     }
     if not required.issubset(result) or not isinstance(result["top_factors"], list):
         raise APIError("The applicant explanation response is incomplete.")
+    return result
+
+
+def applicant_chat_context_key(
+    application_id: str,
+    applicant: dict[str, Any],
+) -> str:
+    """Create a local-only key so chats stay isolated to one applicant record."""
+    payload = json.dumps(
+        {
+            "application_id": application_id,
+            "applicant": applicant_record_from_mapping(applicant),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def chat_about_applicant(
+    base_url: str,
+    applicant: dict[str, Any],
+    question: str,
+    audience: str,
+    *,
+    history: list[dict[str, str]] | None = None,
+    provider_consent: bool = False,
+) -> dict[str, Any]:
+    result = _json_request(
+        "POST",
+        f"{base_url.rstrip('/')}/applications/chat",
+        json={
+            "applicant": applicant_record_from_mapping(applicant),
+            "question": question,
+            "audience": audience,
+            "history": history or [],
+            "provider_consent": provider_consent,
+        },
+        timeout=BATCH_TIMEOUT_SECONDS,
+    )
+    if (
+        not isinstance(result.get("answer"), str)
+        or not isinstance(result.get("answer_status"), str)
+        or not isinstance(result.get("evidence"), dict)
+    ):
+        raise APIError("The applicant chat API returned an invalid response.")
     return result
 
 
