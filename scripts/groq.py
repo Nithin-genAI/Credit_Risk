@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.settings import (
     GROQ_API_KEY,
+    GROQ_API_KEY_2,
     GROQ_BASE_URL,
     GROQ_MODEL,
     GROQ_TIMEOUT_SECONDS,
@@ -18,15 +19,18 @@ from backend.settings import (
 
 
 def main() -> int:
-    if not GROQ_API_KEY:
-        print("GROQ_API_KEY is not configured.")
+    use_backup = "--backup" in sys.argv[1:]
+    api_key = GROQ_API_KEY_2 if use_backup else GROQ_API_KEY
+    key_name = "GROQ_API_KEY_2" if use_backup else "GROQ_API_KEY"
+    if not api_key:
+        print(f"{key_name} is not configured.")
         return 1
 
     try:
         response = requests.post(
             f"{GROQ_BASE_URL}/chat/completions",
             headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -48,7 +52,7 @@ def main() -> int:
         if not isinstance(answer, str) or not answer.strip():
             print("Groq accepted the request but returned no text.")
             return 1
-        print(f"Groq API request succeeded (model: {GROQ_MODEL}).")
+        print(f"Groq API request succeeded using {key_name} (model: {GROQ_MODEL}).")
         print(f"Response: {answer.strip()}")
         if usage:
             print(f"Request token usage: {usage}")

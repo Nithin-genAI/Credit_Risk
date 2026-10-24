@@ -17,6 +17,7 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def disable_external_providers_for_api_tests(monkeypatch):
     monkeypatch.setattr("backend.main.GROQ_API_KEY", "")
+    monkeypatch.setattr("backend.main.GROQ_API_KEY_2", "")
     monkeypatch.setattr("backend.main.GEMINI_API_KEY", "")
     monkeypatch.setattr("backend.services.rbi_assistant.GEMINI_API_KEY", "")
 
@@ -147,6 +148,7 @@ def test_explanation_recomputes_model_evidence_and_returns_narrative(monkeypatch
 
 def test_ai_requests_require_explicit_provider_consent(monkeypatch):
     monkeypatch.setattr("backend.main.GROQ_API_KEY", "configured")
+    monkeypatch.setattr("backend.main.GROQ_API_KEY_2", "")
     explanation = client.post(
         "/applications/explain",
         json={
@@ -231,6 +233,7 @@ def test_applicant_chat_sends_only_selected_applicant_evidence(monkeypatch):
     assert captured["evidence"]["risk_probability"] == 0.22
     assert captured["evidence"]["classification_threshold"] == 0.15
     assert captured["evidence"]["top_factors"][0]["shap_value"] == 0.12345
+    assert captured["evidence"]["top_factors"][0]["applicant_value"] == 0.42
     assert captured["evidence"]["top_factors"][0]["basis"] == (
         "dataset_field_name_and_project_notes"
     )
@@ -245,6 +248,7 @@ def test_applicant_chat_without_consent_uses_local_evidence(monkeypatch):
         "shap_value": 0.1,
     }
     monkeypatch.setattr("backend.main.GROQ_API_KEY", "configured")
+    monkeypatch.setattr("backend.main.GROQ_API_KEY_2", "")
     monkeypatch.setattr(
         "backend.main.prediction_service.predict",
         Mock(return_value=(0.22, None)),

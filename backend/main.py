@@ -5,6 +5,7 @@ import math
 import uuid
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -32,6 +33,7 @@ from backend.settings import (
     CLASSIFICATION_THRESHOLD,
     GEMINI_API_KEY,
     GROQ_API_KEY,
+    GROQ_API_KEY_2,
     MAX_UPLOAD_BYTES,
     MAX_RBI_QUERY_CHARS,
 )
@@ -228,7 +230,7 @@ def _explanation_payload(
     ]
     supplied_features = len(model_features) - len(missing_features)
     if generate_narrative:
-        if (GROQ_API_KEY or GEMINI_API_KEY) and not provider_consent:
+        if (GROQ_API_KEY or GROQ_API_KEY_2 or GEMINI_API_KEY) and not provider_consent:
             raise HTTPException(
                 status_code=403,
                 detail="Explicit provider consent is required for an AI narrative.",
@@ -243,7 +245,7 @@ def _explanation_payload(
             narrative_payload = {
                 "status": narrative.status,
                 "text": narrative.text,
-                "message": None,
+                "message": narrative.safe_message,
             }
         else:
             narrative_payload = {
@@ -332,6 +334,17 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
         }
         for factor in factors
     ]
+    prepared_features = prediction_service.prepare_input(safe_applicant).iloc[0]
+    for factor in described_factors:
+        raw_feature = factor.get("raw_feature")
+        value = prepared_features.get(raw_feature) if raw_feature else None
+        if value is None or (
+            isinstance(value, float) and not math.isfinite(value)
+        ):
+            continue
+        if isinstance(value, np.generic):
+            value = value.item()
+        factor["applicant_value"] = value
     missing_features = [
         column
         for column in model_features
@@ -354,7 +367,9 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
     status = "local_evidence_only"
     provider_message: str | None = None
 
-    if request.provider_consent and (GROQ_API_KEY or GEMINI_API_KEY):
+    if request.provider_consent and (
+        GROQ_API_KEY or GROQ_API_KEY_2 or GEMINI_API_KEY
+    ):
         history = [
             message.model_dump()
             for message in request.history[-MAX_APPLICANT_CHAT_HISTORY:]
@@ -368,6 +383,7 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
         if completion.status == "ready" and completion.text:
             answer = completion.text
             status = "answered_with_selected_applicant_evidence"
+            provider_message = completion.safe_message
         else:
             status = "local_fallback_after_provider_failure"
             provider_message = completion.safe_message or (
@@ -419,8 +435,9 @@ def health_check() -> dict[str, Any]:
         "engineered_features": len(ENGINEERED_FEATURES),
         "transformed_features": len(prediction_service.feature_names),
         "classification_threshold": CLASSIFICATION_THRESHOLD,
-        "llm_configured": bool(GROQ_API_KEY or GEMINI_API_KEY),
-        "groq_configured": bool(GROQ_API_KEY),
+        "llm_configured": bool(GROQ_API_KEY or GROQ_API_KEY_2 or GEMINI_API_KEY),
+        "groq_configured": bool(GROQ_API_KEY or GROQ_API_KEY_2),
+        "groq_backup_configured": bool(GROQ_API_KEY_2),
         "gemini_configured": bool(GEMINI_API_KEY),
         "rbi_live_search_configured": bool(GEMINI_API_KEY),
     }
@@ -507,7 +524,9 @@ def rbi_assistant(question: RegulatoryQuestion) -> dict[str, Any]:
             status_code=422,
             detail=f"Question must be at most {MAX_RBI_QUERY_CHARS} characters.",
         )
-    if (GROQ_API_KEY or GEMINI_API_KEY) and not question.provider_consent:
+    if (
+        GROQ_API_KEY or GROQ_API_KEY_2 or GEMINI_API_KEY
+    ) and not question.provider_consent:
         raise HTTPException(
             status_code=403,
             detail="Explicit provider consent is required for an RBI assistant answer.",

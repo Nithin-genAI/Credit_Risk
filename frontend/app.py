@@ -507,7 +507,10 @@ def render_explanation() -> None:
     if narrative.get("text"):
         st.info(narrative["text"])
         if narrative.get("message"):
-            st.caption(narrative["message"])
+            if "tell the developer" in narrative["message"].casefold():
+                st.error(narrative["message"])
+            else:
+                st.caption(narrative["message"])
     elif narrative.get("status") == "not_requested":
         health, _ = api_health()
         if health and health.get("llm_configured"):
@@ -618,9 +621,10 @@ def render_explanation() -> None:
     if llm_configured:
         st.caption(
             "With consent, the question, recent chat messages, probability, "
-            "provisional class, top SHAP factors and their descriptions, and "
-            "missing-field names may be sent to the configured backend provider. "
-            "Applicant identifiers, name, and raw feature values are excluded. "
+            "provisional class, top SHAP factors, descriptions, and only the "
+            "raw values for those top factors may be sent to the configured "
+            "backend provider. Applicant identifiers, name, and the complete "
+            "raw feature row are excluded. "
             "Do not add private details to your question. Leave consent off to "
             "get a local answer from model evidence only."
         )
@@ -628,6 +632,8 @@ def render_explanation() -> None:
             "I authorize sending this question and minimized explanation evidence to the AI provider.",
             key=f"applicant_chat_consent_{context_key[:12]}",
         )
+        if health and health.get("groq_backup_configured"):
+            st.caption("A backup Groq API key is configured for quota failover.")
     audience = st.radio(
         "Explanation style",
         ["Applicant", "Loan officer"],
@@ -638,7 +644,12 @@ def render_explanation() -> None:
         with st.chat_message(turn["role"]):
             st.markdown(turn["content"])
             if turn.get("provider_message"):
-                st.caption(turn["provider_message"])
+                if "tell the developer" in turn["provider_message"].casefold():
+                    st.error(turn["provider_message"])
+                elif "output-token limit" in turn["provider_message"].casefold():
+                    st.warning(turn["provider_message"])
+                else:
+                    st.caption(turn["provider_message"])
     with st.form(f"applicant_chat_form_{context_key[:12]}"):
         question = st.text_input(
             "Ask a follow-up question",
@@ -812,7 +823,13 @@ def render_rbi_assistant() -> None:
     response = st.session_state["rbi_response"]
     if response:
         st.markdown("#### Answer")
-        st.write(response["answer"])
+        if (
+            response.get("answer_status") == "quota_exhausted"
+            or "tell the developer" in response["answer"].casefold()
+        ):
+            st.error(response["answer"])
+        else:
+            st.write(response["answer"])
         st.caption(f"Evidence status: {response['answer_status']}")
         if response.get("disclaimer"):
             st.info(response["disclaimer"])

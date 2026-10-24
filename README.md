@@ -92,7 +92,10 @@ accuracy.
 
 Copy `.env.example` to `.env` in the repository root and add provider credentials
 there, never in Streamlit code or a committed template. `GROQ_API_KEY` enables
-OpenAI-compatible text generation. `GEMINI_API_KEY` enables Gemini text
+OpenAI-compatible text generation; optional `GROQ_API_KEY_2` is a backup tried
+when the primary Groq key is rejected or rate/quota limited. The backup needs
+its own available quota; if both Groq keys are limited, configured Gemini can
+serve as a text-generation fallback. `GEMINI_API_KEY` enables Gemini text
 generation and Google Search grounding for RBI live-search fallback. Gemini
 uses the official `https://generativelanguage.googleapis.com/v1beta` API;
 `GEMINI_MODEL` defaults to `gemini-2.5-flash`. General text generation uses
@@ -108,13 +111,16 @@ when it cannot obtain verified official citations.
 External AI requests require explicit user consent. Applicant chat sends only
 the user's question, bounded recent chat turns, predicted probability/class,
 top SHAP factors and descriptions, and missing-feature names; it excludes
-applicant identifiers, name, and raw feature values. With consent off, the
-applicant assistant answers from local model/SHAP evidence only. RBI questions
-and retrieved public excerpts may be sent to Gemini for live grounding; the UI
-warns users not to include private applicant data.
+applicant identifiers, name, and the full raw feature row. With consent, only
+values for the top SHAP features may also be sent, allowing data-specific
+questions such as how to correct inaccurate application details. With consent
+off, the applicant assistant answers from local model/SHAP evidence only. RBI
+questions and retrieved public excerpts may be sent to Gemini for live
+grounding; the UI warns users not to include private applicant data.
 
-Run `python scripts/groq.py` or `python scripts/gemini.py` from the repository
-root to send a small text-generation smoke test to that provider. These scripts
+Run `python scripts/groq.py`, `python scripts/groq.py --backup`, or
+`python scripts/gemini.py` from the repository root to send a small
+text-generation smoke test to that provider. These scripts
 report whether the configured key/model can make a request and the returned
 request token usage when available; provider account credit balances must be
 checked in the provider's own console. They never print API keys.

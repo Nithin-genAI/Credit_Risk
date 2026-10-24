@@ -36,6 +36,7 @@ GROQ_BASE_URL = os.getenv(
 ).rstrip("/")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
 GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "20"))
+GROQ_API_KEY_2 = os.getenv("GROQ_API_KEY_2", "").strip()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_BASE_URL = os.getenv(
