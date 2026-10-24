@@ -5,6 +5,9 @@
 .env.*
 !.env.example
 
+# Generated official-source excerpts; rebuild from the allowlisted catalog.
+data/rbi_sources/index.jsonl
+
 # ============================================
 # Python cache
 # ============================================

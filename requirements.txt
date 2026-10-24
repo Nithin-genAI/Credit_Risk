@@ -11,3 +11,5 @@ shap>=0.46,<1
 joblib>=1.4,<2
 pytest>=8,<10
 httpx2>=0.1
+openpyxl>=3.1,<4
+python-dotenv>=1,<2
