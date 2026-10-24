@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -11,6 +12,13 @@ from backend.services.prediction_service import prediction_service
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def disable_external_providers_for_api_tests(monkeypatch):
+    monkeypatch.setattr("backend.main.GROQ_API_KEY", "")
+    monkeypatch.setattr("backend.main.GEMINI_API_KEY", "")
+    monkeypatch.setattr("backend.services.rbi_assistant.GEMINI_API_KEY", "")
 
 
 def test_health():
@@ -131,8 +139,10 @@ def test_explanation_recomputes_model_evidence_and_returns_narrative(monkeypatch
     assert payload["predicted_class"] == 1
     assert payload["classification_threshold"] == 0.15
     assert payload["top_factors"] == [factor]
-    assert payload["narrative"]["status"] == "not_configured"
-    assert payload["narrative"]["text"] is None
+    assert payload["narrative"]["status"] == "local_fallback"
+    assert "22.0% default probability" in payload["narrative"]["text"]
+    assert "num__EXT_SOURCE_3" in payload["narrative"]["text"]
+    assert payload["narrative"]["message"] == "LLM is not configured."
 
 
 def test_ai_requests_require_explicit_provider_consent(monkeypatch):
@@ -156,6 +166,132 @@ def test_ai_requests_require_explicit_provider_consent(monkeypatch):
 
     assert explanation.status_code == 403
     assert rbi.status_code == 403
+
+
+def test_applicant_chat_sends_only_selected_applicant_evidence(monkeypatch):
+    factor = {
+        "feature": "num__EXT_SOURCE_3",
+        "impact": "increases_risk",
+        "shap_value": 0.12345,
+    }
+    monkeypatch.setattr("backend.main.GROQ_API_KEY", "configured")
+    monkeypatch.setattr(
+        "backend.main.prediction_service.predict",
+        Mock(return_value=(0.22, None)),
+    )
+    monkeypatch.setattr(
+        "backend.main.prediction_service.explain",
+        Mock(return_value=[factor]),
+    )
+    captured = {}
+
+    def chat_answer(question, audience, evidence, history):
+        captured.update(
+            {
+                "question": question,
+                "audience": audience,
+                "evidence": evidence,
+                "history": history,
+            }
+        )
+        return SimpleNamespace(
+            status="ready",
+            text="This answer only uses the supplied model evidence.",
+            safe_message=None,
+        )
+
+    monkeypatch.setattr("backend.main.generate_applicant_chat_answer", chat_answer)
+    response = client.post(
+        "/applications/chat",
+        json={
+            "applicant": {
+                "application_id": "PRIVATE-APPLICATION-ID",
+                "name": "PRIVATE-APPLICANT-NAME",
+                "SK_ID_CURR": 987654,
+                "AMT_INCOME_TOTAL": 180000,
+                "AMT_CREDIT": 500000,
+                "DAYS_BIRTH": -12000,
+                "EXT_SOURCE_3": 0.42,
+            },
+            "question": "Why did the model assign this estimate?",
+            "audience": "applicant",
+            "history": [{"role": "user", "content": "Earlier question"}],
+            "provider_consent": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer_status"] == (
+        "answered_with_selected_applicant_evidence"
+    )
+    assert "PRIVATE-APPLICATION-ID" not in str(captured)
+    assert "PRIVATE-APPLICANT-NAME" not in str(captured)
+    assert "987654" not in str(captured)
+    assert "180000" not in str(captured)
+    assert captured["evidence"]["risk_probability"] == 0.22
+    assert captured["evidence"]["classification_threshold"] == 0.15
+    assert captured["evidence"]["top_factors"][0]["shap_value"] == 0.12345
+    assert captured["evidence"]["top_factors"][0]["basis"] == (
+        "dataset_field_name_and_project_notes"
+    )
+    assert "DAYS_EMPLOYED" in captured["evidence"]["missing_feature_names"]
+    assert captured["history"] == [{"role": "user", "content": "Earlier question"}]
+
+
+def test_applicant_chat_without_consent_uses_local_evidence(monkeypatch):
+    factor = {
+        "feature": "num__CREDIT_TO_INCOME",
+        "impact": "increases_risk",
+        "shap_value": 0.1,
+    }
+    monkeypatch.setattr("backend.main.GROQ_API_KEY", "configured")
+    monkeypatch.setattr(
+        "backend.main.prediction_service.predict",
+        Mock(return_value=(0.22, None)),
+    )
+    monkeypatch.setattr(
+        "backend.main.prediction_service.explain",
+        Mock(return_value=[factor]),
+    )
+    monkeypatch.setattr(
+        "backend.main.generate_applicant_chat_answer",
+        Mock(side_effect=AssertionError("No provider call without consent.")),
+    )
+
+    response = client.post(
+        "/applications/chat",
+        json={
+            "applicant": {
+                "AMT_INCOME_TOTAL": 180000,
+                "AMT_CREDIT": 500000,
+                "DAYS_BIRTH": -12000,
+            },
+            "question": "Explain this risk estimate",
+            "provider_consent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer_status"] == "local_evidence_only"
+    assert "SHAP describes" in response.json()["answer"]
+
+
+def test_applicant_chat_rejects_target_input():
+    response = client.post(
+        "/applications/chat",
+        json={
+            "applicant": {
+                "AMT_INCOME_TOTAL": 180000,
+                "AMT_CREDIT": 500000,
+                "DAYS_BIRTH": -12000,
+                "TARGET": 1,
+            },
+            "question": "Explain this risk estimate",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "TARGET" in response.json()["detail"]["unsupported_columns"]
 
 
 def test_explanation_rejects_target_input():

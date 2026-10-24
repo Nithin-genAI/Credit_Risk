@@ -37,6 +37,13 @@ GROQ_BASE_URL = os.getenv(
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
 GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "20"))
 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_BASE_URL = os.getenv(
+    "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+).rstrip("/")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
+
 PROJECT_ROOT = str(PROJECT_PATH)
 RBI_SOURCE_CATALOG = str(PROJECT_PATH / "data" / "rbi_sources" / "catalog.json")
 RBI_SOURCE_INDEX = str(PROJECT_PATH / "data" / "rbi_sources" / "index.jsonl")

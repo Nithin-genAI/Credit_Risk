@@ -7,8 +7,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from backend.services.llm_client import generate_completion
-from backend.settings import RBI_SOURCE_CATALOG, RBI_SOURCE_INDEX
+from backend.services.llm_client import (
+    generate_completion,
+    generate_grounded_rbi_completion,
+)
+from backend.settings import GEMINI_API_KEY, RBI_SOURCE_CATALOG, RBI_SOURCE_INDEX
 
 
 STOP_WORDS = {
@@ -166,12 +169,62 @@ def answer_question(
     index_path: str | Path = RBI_SOURCE_INDEX,
 ) -> dict[str, Any]:
     chunks = retrieve_sources(question, _load_index(index_path))
+    citations = [_citation(chunk) for chunk in chunks]
+    requires_current_search = _is_currentness_query(question)
+    local_context = [
+        {
+            "title": citation["title"],
+            "url": citation["url"],
+            "updated_as_of": citation["updated_as_of"],
+            "currentness_status": citation["currentness_status"],
+            "status_note": citation["status_note"],
+            "section": citation["relevant_section"],
+            "excerpt": str(chunk["text"])[:MAX_CONTEXT_CHARS],
+        }
+        for chunk, citation in zip(chunks, citations)
+    ]
+
+    if GEMINI_API_KEY and (not chunks or requires_current_search):
+        grounded = generate_grounded_rbi_completion(
+            question,
+            audience,
+            local_context,
+        )
+        if grounded.status == "ready" and grounded.text:
+            combined: dict[str, dict[str, Any]] = {}
+            for source in [*citations, *grounded.sources]:
+                source_url = source.get("url")
+                if isinstance(source_url, str):
+                    combined[source_url] = source
+            return {
+                "answer": grounded.text,
+                "sources": list(combined.values())[:8],
+                "answer_status": "answered_with_live_search_grounding",
+                "disclaimer": (
+                    "Live search was used through Gemini Google Search grounding. "
+                    "Verify each official RBI source, date, and applicability. "
+                    "This is not a legal, compliance, or lending decision."
+                ),
+            }
+        return {
+            "answer": (
+                grounded.safe_message
+                or "Live search did not provide enough verified RBI evidence to answer."
+            ),
+            "sources": citations,
+            "answer_status": grounded.status,
+            "disclaimer": (
+                "No live regulatory answer was generated. Local source references "
+                "are provided only as background and may not establish current rules."
+            ),
+        }
+
     if not chunks:
         return {
             "answer": (
-                "I could not find a relevant passage in the locally indexed "
-                "official RBI source set. I will not guess. Ask about an indexed "
-                "topic or verify the relevant rule directly on the RBI website."
+                "I could not find a relevant passage in the local RBI index, and "
+                "live Google Search grounding is not configured. I will not guess. "
+                "Verify the relevant rule directly on the official RBI website."
             ),
             "sources": [],
             "answer_status": "no_indexed_evidence",
@@ -181,18 +234,12 @@ def answer_question(
             ),
         }
 
-    citations = [_citation(chunk) for chunk in chunks]
-    if _is_currentness_query(question) and any(
-        chunk["currentness_status"] != "consolidated_as_of_source_update"
-        for chunk in chunks
-    ):
+    if requires_current_search:
         return {
             "answer": (
-                "I found official RBI material, but the indexed document metadata "
-                "does not verify that the cited instructions are the current "
-                "consolidated requirements. I cannot state them as currently "
-                "applicable. Please verify the latest RBI directions and any "
-                "amendments on the official pages below."
+                "I found local RBI material, but this request asks about current "
+                "applicability and live Google Search grounding is not configured. "
+                "I cannot confirm whether later directions or amendments apply."
             ),
             "sources": citations,
             "answer_status": "currentness_unverified",

@@ -150,8 +150,15 @@ class PredictionService:
             X_processed
         )
 
-        # For a single applicant
-        values = shap_values[0]
+        shap_array = np.asarray(shap_values)
+        if shap_array.ndim != 2 or shap_array.shape != (
+            1,
+            len(self.feature_names),
+        ):
+            raise RuntimeError(
+                "SHAP output does not align with the transformed feature schema."
+            )
+        values = shap_array[0]
 
         # Find strongest contributors
         importance = np.abs(values)

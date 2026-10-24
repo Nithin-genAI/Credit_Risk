@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -44,6 +44,19 @@ class ExplanationRequest(BaseModel):
 class RegulatoryQuestion(BaseModel):
     question: str = Field(..., min_length=3, max_length=1000)
     audience: str = Field(default="applicant", pattern="^(applicant|loan_officer)$")
+    provider_consent: bool = False
+
+
+class ApplicantChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=1500)
+
+
+class ApplicantChatRequest(BaseModel):
+    applicant: dict[str, Any]
+    question: str = Field(..., min_length=3, max_length=1000)
+    audience: Literal["applicant", "loan_officer"] = "applicant"
+    history: list[ApplicantChatMessage] = Field(default_factory=list, max_length=8)
     provider_consent: bool = False
 
 
