@@ -64,6 +64,10 @@ Start the light, retro-chroma Streamlit interface in a second terminal:
 python -m streamlit run frontend/app.py
 ```
 
+The Streamlit entry point adds the repository root to Python's import path so
+the `frontend` package imports work when deployed with `frontend/app.py` as the
+configured main file.
+
 The UI defaults to `http://127.0.0.1:8000`. Override it with
 `DRIFTING_ORACLE_API_URL` if the API is hosted elsewhere, for example:
 
