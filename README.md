@@ -1,4 +1,4 @@
-﻿# Drifting Oracle
+﻿# Drifting Oracle  Django
 
 Drifting Oracle is a credit-default modeling prototype built from the Home
 Credit Default Risk benchmark. V1 predicts the probability of `TARGET = 1`
