@@ -26,7 +26,7 @@ Credit_Risk/
 |       |-- catalog.json                    # Allowlisted official RBI references and status notes
 |       `-- index.jsonl                     # Generated local excerpts; rebuild with the ingest script
 |-- frontend/
-|   |-- app.py                              # Overview, batch review, explanations, and RBI assistant
+|   |-- app.py                              # Streamlit views; adds project root for deployment imports
 |   |-- api_client.py                       # Frontend calls and validation for the FastAPI service
 |   `-- tests/
 |       `-- test_api_client.py              # API client and upload preparation tests
@@ -68,7 +68,7 @@ Credit_Risk/
 |-- data_summary.txt                        # Dataset notes and summary
 |-- README.md                               # Project overview, setup, launch, tests, and limitations
 |-- requirements.txt                        # Python dependencies
-`-- Folder Structure.md                     # This project structure guide
+`-- Folder_Structure.md                     # This project structure guide
 ```
 
 ## How the parts fit together
@@ -79,6 +79,12 @@ in `backend/`; the backend uses the saved preprocessor and XGBoost model in
 validation and inference run in the backend. The notebooks document model
 development, while `data/demo_applicants.csv` provides repeatable benchmark
 examples for trying the UI.
+
+The Streamlit entry point adds the repository root to Python's import path so
+the `frontend` package can be imported when Streamlit Cloud runs
+`frontend/app.py` directly. A deployed frontend also needs
+`DRIFTING_ORACLE_API_URL` configured to point to a reachable FastAPI backend;
+the local default URL is not reachable from Streamlit Cloud.
 
 The demo records are sampled from the Home Credit benchmark dataset. They are
 not verified real-world bank applications. Drift monitoring and automatic
