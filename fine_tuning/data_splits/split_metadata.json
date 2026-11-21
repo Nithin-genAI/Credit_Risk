@@ -1,0 +1,33 @@
+{
+    "experiment": "Credit Risk V2",
+    "dataset": "Home Credit application_train.csv",
+    "random_state": 42,
+    "split_strategy": "Stratified two-stage train_test_split",
+    "split_proportions": {
+        "train": 0.7,
+        "validation": 0.15,
+        "test": 0.15
+    },
+    "partitions": {
+        "train": {
+            "rows": 215257,
+            "default_rate": 0.080727
+        },
+        "validation": {
+            "rows": 46127,
+            "default_rate": 0.080734
+        },
+        "test": {
+            "rows": 46127,
+            "default_rate": 0.080734
+        }
+    },
+    "total_rows": 307511,
+    "total_columns": 122,
+    "identifier_column": "SK_ID_CURR",
+    "target_column": "TARGET",
+    "model_input_exclusions": [
+        "SK_ID_CURR",
+        "TARGET"
+    ]
+}
