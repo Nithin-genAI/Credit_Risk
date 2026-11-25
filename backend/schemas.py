@@ -3,6 +3,9 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+ModelVersion = Literal["v1", "v2"]
+
+
 class ApplicantInput(BaseModel):
     """Single-applicant request; extra recognized model fields are permitted."""
 
@@ -39,6 +42,7 @@ class ExplanationRequest(BaseModel):
     applicant: dict[str, Any]
     generate_narrative: bool = False
     provider_consent: bool = False
+    model_version: ModelVersion = "v1"
 
 
 class RegulatoryQuestion(BaseModel):
@@ -58,9 +62,11 @@ class ApplicantChatRequest(BaseModel):
     audience: Literal["applicant", "loan_officer"] = "applicant"
     history: list[ApplicantChatMessage] = Field(default_factory=list, max_length=8)
     provider_consent: bool = False
+    model_version: ModelVersion = "v1"
 
 
 class BatchValidationResponse(BaseModel):
+    model_version: str = "baseline-v1"
     valid: bool
     file_type: str
     row_count: int

@@ -67,6 +67,97 @@ def test_predict_includes_shap_factors():
     }
 
 
+def test_v2_predict_uses_matching_artifacts_threshold_and_shap():
+    response = client.post(
+        "/predict?model_version=v2",
+        json={
+            "application_id": "V2-APP-10001",
+            "name": "Applicant",
+            "AMT_INCOME_TOTAL": 180000,
+            "AMT_CREDIT": 500000,
+            "DAYS_BIRTH": -12000,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["model_version"] == "v2"
+    assert result["classification_threshold"] == 0.22
+    assert result["predicted_class"] == int(result["risk_probability"] >= 0.22)
+    assert len(result["top_factors"]) == 5
+
+    bundle = prediction_service.get_model("v2")
+    assert prediction_service.get_model("v2") is bundle
+    assert bundle.model.n_features_in_ == len(bundle.feature_names)
+    assert len(model_feature_schema("v2")[0]) == 120
+
+
+def test_v2_batch_validation_and_scoring_use_selected_model_and_threshold():
+    content = (
+        "application_id,AMT_INCOME_TOTAL,AMT_CREDIT,DAYS_BIRTH\n"
+        "V2-ROW-A,100000,200000,-12000\n"
+        "V2-ROW-B,120000,240000,-13000\n"
+    )
+    validation = client.post(
+        "/applications/batch/validate?model_version=v2",
+        files={"file": ("v2-applicants.csv", content, "text/csv")},
+    )
+    assert validation.status_code == 200
+    assert validation.json()["model_version"] == "v2"
+    assert validation.json()["expected_model_column_count"] == 120
+
+    response = client.post(
+        "/predict/batch?model_version=v2",
+        files={"file": ("v2-applicants.csv", content, "text/csv")},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["model_version"] == "v2"
+    assert result["classification_threshold"] == 0.22
+    assert result["total_applications"] == 2
+    assert result["successful_predictions"] == 2
+    assert [row["application_id"] for row in result["results"]] == [
+        "V2-ROW-A",
+        "V2-ROW-B",
+    ]
+    assert all(row["model_version"] == "v2" for row in result["results"])
+
+
+def test_v2_applicant_explanation_and_chat_keep_model_context():
+    applicant = {
+        "AMT_INCOME_TOTAL": 180000,
+        "AMT_CREDIT": 500000,
+        "DAYS_BIRTH": -12000,
+    }
+    explanation = client.post(
+        "/applications/explain",
+        json={
+            "application_id": "V2-APP-10002",
+            "applicant": applicant,
+            "model_version": "v2",
+        },
+    )
+    assert explanation.status_code == 200
+    explanation_result = explanation.json()
+    assert explanation_result["model_version"] == "v2"
+    assert explanation_result["classification_threshold"] == 0.22
+    assert len(explanation_result["top_factors"]) == 5
+
+    chat = client.post(
+        "/applications/chat",
+        json={
+            "applicant": applicant,
+            "question": "Explain this model estimate",
+            "model_version": "v2",
+        },
+    )
+    assert chat.status_code == 200
+    chat_result = chat.json()
+    assert chat_result["model_version"] == "v2"
+    assert chat_result["evidence"]["classification_threshold"] == 0.22
+    assert chat_result["answer_status"] == "local_evidence_only"
+
+
 def test_predict_rejects_target_and_unsupported_fields():
     base = {
         "application_id": "APP-10002",

@@ -131,9 +131,14 @@ checked in the provider's own console. They never print API keys.
 
 `DRIFTING_ORACLE_CLASSIFICATION_THRESHOLD` defaults to `0.15`. It determines
 the separate predicted class (class 1 at or above the threshold); it is a
-provisional demonstration setting, not an approved lending policy. Upload size,
-batch row count, and RBI question length are configurable with the other
-`DRIFTING_ORACLE_*` settings.
+provisional V1 demonstration setting, not an approved lending policy. V2 uses
+`DRIFTING_ORACLE_V2_CLASSIFICATION_THRESHOLD`, which defaults to `0.22`. The
+Application Review model selector chooses V1 or V2; V1 remains the default for
+API clients that omit `model_version`. The model version is carried through
+batch validation, scoring, applicant explanations, and applicant chat. Each
+version loads its own saved model and matching preprocessor, with artifacts
+cached by the backend. Upload size, batch row count, and RBI question length
+are configurable with the other `DRIFTING_ORACLE_*` settings.
 
 Build or refresh the local RBI excerpt index from the allowlisted official RBI
 pages:
@@ -171,12 +176,21 @@ assistant abstains or returns only a clearly caveated local-source response.
 - `GET /assistant/rbi/sources`: show catalogued source references and whether
   each is currently indexed.
 
-CSV and XLSX requests use the saved 120-original-feature contract plus the
-existing 10 training-time engineered features. `TARGET` and `SK_ID_CURR` are
-never model inputs; the latter is only a record reference. Optional absent
-features are imputed by the saved preprocessor, but incomplete feature coverage
-is disclosed and is not equivalent to complete-feature inference. The saved
-model and preprocessor are reused; this workflow does not retrain them.
+`/predict`, `/applications/batch/validate`, and `/predict/batch` accept the
+optional `model_version` query parameter (`v1` or `v2`, default `v1`).
+Explanation and applicant-chat requests accept `model_version` in their JSON
+body, also defaulting to `v1`. Responses identify the model used and its
+threshold. The Streamlit model selector carries the same selection through
+batch validation, scoring, inspection, and applicant chat.
+
+Both versions accept the same 120 original model columns. The backend applies
+the shared feature engineering; V1 uses 10 derived features, while the V2
+preprocessor uses the 9 features it was trained with. `TARGET` and `SK_ID_CURR`
+are never model inputs; the latter is only a record reference. Optional absent
+features are imputed by the selected model's preprocessor, but incomplete
+feature coverage is disclosed and is not equivalent to complete-feature
+inference. Each version uses its matching saved model/preprocessor pair; the
+API does not retrain them.
 
 ## UI/API smoke checks
 
@@ -190,9 +204,10 @@ With the API and Streamlit app running, check:
 
 1. **Executive Overview:** verify API/model readiness, historical validation
    metrics, and session-only counts/activity.
-2. **Application Review:** validate an uploaded CSV or XLSX before scoring;
-   check missing/unsupported columns, `TARGET` exclusion, row errors,
-   result filtering/export, and Inspect navigation.
+2. **Application Review:** select V1 or V2, validate an uploaded CSV or XLSX
+   before scoring, and confirm the selected model's threshold. Check
+   missing/unsupported columns, `TARGET` exclusion, row errors, result
+   filtering/export, and Inspect navigation.
 3. **Applicant Explanation:** inspect local SHAP factors and feature coverage.
    Verify the feature meaning caveats, ask an applicant-specific follow-up with
    consent off (local answer), and confirm the conversation resets for another

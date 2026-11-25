@@ -13,6 +13,7 @@ from backend.schemas import (
     ApplicantChatRequest,
     ApplicantInput,
     BatchValidationResponse,
+    ModelVersion,
 )
 from backend.services.batch_inference import (
     BatchFileError,
@@ -31,6 +32,7 @@ from backend.services.prediction_service import prediction_service
 from backend.services.rbi_assistant import answer_question, source_catalog
 from backend.settings import (
     CLASSIFICATION_THRESHOLD,
+    V2_CLASSIFICATION_THRESHOLD,
     GEMINI_API_KEY,
     GROQ_API_KEY,
     GROQ_API_KEY_2,
@@ -61,8 +63,20 @@ app.add_middleware(
 )
 
 
-def _classification(probability: float) -> tuple[int, str]:
-    predicted_class = int(probability >= CLASSIFICATION_THRESHOLD)
+def _threshold_for_model(model_version: str) -> float:
+    version = prediction_service.normalize_version(model_version)
+    return (
+        CLASSIFICATION_THRESHOLD
+        if version == "v1"
+        else V2_CLASSIFICATION_THRESHOLD
+    )
+
+
+def _classification(
+    probability: float,
+    model_version: str = "v1",
+) -> tuple[int, str]:
+    predicted_class = int(probability >= _threshold_for_model(model_version))
     label = (
         "elevated_default_risk"
         if predicted_class
@@ -71,15 +85,21 @@ def _classification(probability: float) -> tuple[int, str]:
     return predicted_class, label
 
 
-def _validate_model_fields(applicant: dict[str, Any]) -> list[str]:
-    model_features = set(model_feature_schema()[0])
+def _validate_model_fields(
+    applicant: dict[str, Any],
+    model_version: str = "v1",
+) -> list[str]:
+    model_features = set(model_feature_schema(model_version)[0])
     metadata_fields = {"application_id", "name", "SK_ID_CURR"}
     unsupported = sorted(set(applicant) - model_features - metadata_fields)
     return unsupported
 
 
-def _invalid_model_values(applicant: dict[str, Any]) -> list[str]:
-    _, numeric_features, categorical_features = model_feature_schema()
+def _invalid_model_values(
+    applicant: dict[str, Any],
+    model_version: str = "v1",
+) -> list[str]:
+    _, numeric_features, categorical_features = model_feature_schema(model_version)
     invalid = []
     for field in numeric_features:
         value = applicant.get(field)
@@ -96,8 +116,11 @@ def _invalid_model_values(applicant: dict[str, Any]) -> list[str]:
     return sorted(invalid)
 
 
-def _feature_details(factors: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    _, _, categorical_features = model_feature_schema()
+def _feature_details(
+    factors: list[dict[str, Any]],
+    model_version: str = "v1",
+) -> dict[str, dict[str, Any]]:
+    _, _, categorical_features = model_feature_schema(model_version)
     return {
         str(factor["feature"]): describe_model_feature(
             str(factor["feature"]),
@@ -188,8 +211,9 @@ def _explanation_payload(
     application_id: str,
     generate_narrative: bool,
     provider_consent: bool,
+    model_version: str = "v1",
 ) -> dict[str, Any]:
-    unsupported = _validate_model_fields(applicant)
+    unsupported = _validate_model_fields(applicant, model_version)
     if unsupported:
         raise HTTPException(
             status_code=422,
@@ -198,7 +222,7 @@ def _explanation_payload(
                 "unsupported_columns": unsupported,
             },
         )
-    invalid_values = _invalid_model_values(applicant)
+    invalid_values = _invalid_model_values(applicant, model_version)
     if invalid_values:
         raise HTTPException(
             status_code=422,
@@ -211,11 +235,16 @@ def _explanation_payload(
     safe_applicant = {
         key: value
         for key, value in applicant.items()
-        if key in set(model_feature_schema()[0]) | {"application_id", "name"}
+        if key
+        in set(model_feature_schema(model_version)[0]) | {"application_id", "name"}
     }
     try:
-        probability, _ = prediction_service.predict(safe_applicant)
-        factors = prediction_service.explain(safe_applicant, top_n=5)
+        probability, _ = prediction_service.predict(safe_applicant, model_version)
+        factors = prediction_service.explain(
+            safe_applicant,
+            top_n=5,
+            model_version=model_version,
+        )
     except Exception as exc:
         logger.error("applicant_explanation_failed error_type=%s", type(exc).__name__)
         raise HTTPException(
@@ -223,8 +252,12 @@ def _explanation_payload(
             detail="Could not calculate the saved model explanation.",
         ) from exc
 
-    predicted_class, provisional_classification = _classification(probability)
-    model_features = model_feature_schema()[0]
+    predicted_class, provisional_classification = _classification(
+        probability,
+        model_version,
+    )
+    threshold = _threshold_for_model(model_version)
+    model_features = model_feature_schema(model_version)[0]
     missing_features = [
         column for column in model_features if safe_applicant.get(column) is None
     ]
@@ -238,7 +271,7 @@ def _explanation_payload(
         narrative = explain_model_evidence(
             probability,
             predicted_class,
-            CLASSIFICATION_THRESHOLD,
+            threshold,
             factors,
         )
         if narrative.status == "ready" and narrative.text:
@@ -253,7 +286,7 @@ def _explanation_payload(
                 "text": _local_plain_language_explanation(
                     probability,
                     provisional_classification,
-                    CLASSIFICATION_THRESHOLD,
+                    threshold,
                     factors,
                     len(missing_features),
                 ),
@@ -274,10 +307,10 @@ def _explanation_payload(
         "risk_probability": round(probability, 6),
         "predicted_class": predicted_class,
         "provisional_classification": provisional_classification,
-        "classification_threshold": CLASSIFICATION_THRESHOLD,
-        "model_version": "baseline-v1",
+        "classification_threshold": threshold,
+        "model_version": prediction_service.model_label(model_version),
         "top_factors": factors,
-        "feature_details": _feature_details(factors),
+        "feature_details": _feature_details(factors, model_version),
         "feature_coverage": round(supplied_features / len(model_features), 4),
         "missing_model_features": len(missing_features),
         "missing_feature_names": missing_features,
@@ -290,7 +323,8 @@ def _explanation_payload(
 
 
 def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
-    unsupported = _validate_model_fields(request.applicant)
+    model_version = request.model_version
+    unsupported = _validate_model_fields(request.applicant, model_version)
     if unsupported:
         raise HTTPException(
             status_code=422,
@@ -299,7 +333,7 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
                 "unsupported_columns": unsupported,
             },
         )
-    invalid_values = _invalid_model_values(request.applicant)
+    invalid_values = _invalid_model_values(request.applicant, model_version)
     if invalid_values:
         raise HTTPException(
             status_code=422,
@@ -309,15 +343,19 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
             },
         )
 
-    model_features = model_feature_schema()[0]
+    model_features = model_feature_schema(model_version)[0]
     safe_applicant = {
         key: value
         for key, value in request.applicant.items()
         if key in set(model_features)
     }
     try:
-        probability, _ = prediction_service.predict(safe_applicant)
-        factors = prediction_service.explain(safe_applicant, top_n=10)
+        probability, _ = prediction_service.predict(safe_applicant, model_version)
+        factors = prediction_service.explain(
+            safe_applicant,
+            top_n=10,
+            model_version=model_version,
+        )
     except Exception as exc:
         logger.error("applicant_chat_evidence_failed error_type=%s", type(exc).__name__)
         raise HTTPException(
@@ -325,8 +363,12 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
             detail="Could not calculate model evidence for this chat.",
         ) from exc
 
-    predicted_class, provisional_classification = _classification(probability)
-    details = _feature_details(factors)
+    predicted_class, provisional_classification = _classification(
+        probability,
+        model_version,
+    )
+    threshold = _threshold_for_model(model_version)
+    details = _feature_details(factors, model_version)
     described_factors = [
         {
             **factor,
@@ -334,7 +376,10 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
         }
         for factor in factors
     ]
-    prepared_features = prediction_service.prepare_input(safe_applicant).iloc[0]
+    prepared_features = prediction_service.prepare_input(
+        safe_applicant,
+        model_version,
+    ).iloc[0]
     for factor in described_factors:
         raw_feature = factor.get("raw_feature")
         value = prepared_features.get(raw_feature) if raw_feature else None
@@ -354,7 +399,8 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
         "risk_probability": round(probability, 6),
         "predicted_class": predicted_class,
         "provisional_classification": provisional_classification,
-        "classification_threshold": CLASSIFICATION_THRESHOLD,
+        "classification_threshold": threshold,
+        "model_version": prediction_service.model_label(model_version),
         "feature_coverage": round(
             (len(model_features) - len(missing_features)) / len(model_features),
             4,
@@ -395,6 +441,7 @@ def _applicant_chat_payload(request: ApplicantChatRequest) -> dict[str, Any]:
         "answer": answer,
         "answer_status": status,
         "provider_message": provider_message,
+        "model_version": prediction_service.model_label(model_version),
         "evidence": evidence,
         "disclaimer": (
             "SHAP values describe how inputs contributed to this model output; "
@@ -435,6 +482,10 @@ def health_check() -> dict[str, Any]:
         "engineered_features": len(ENGINEERED_FEATURES),
         "transformed_features": len(prediction_service.feature_names),
         "classification_threshold": CLASSIFICATION_THRESHOLD,
+        "model_thresholds": {
+            "v1": CLASSIFICATION_THRESHOLD,
+            "v2": V2_CLASSIFICATION_THRESHOLD,
+        },
         "llm_configured": bool(GROQ_API_KEY or GROQ_API_KEY_2 or GEMINI_API_KEY),
         "groq_configured": bool(GROQ_API_KEY or GROQ_API_KEY_2),
         "groq_backup_configured": bool(GROQ_API_KEY_2),
@@ -444,9 +495,12 @@ def health_check() -> dict[str, Any]:
 
 
 @app.post("/predict")
-def predict(applicant: ApplicantInput) -> dict[str, Any]:
+def predict(
+    applicant: ApplicantInput,
+    model_version: ModelVersion = "v1",
+) -> dict[str, Any]:
     applicant_data = applicant.model_dump()
-    unsupported = _validate_model_fields(applicant_data)
+    unsupported = _validate_model_fields(applicant_data, model_version)
     if unsupported:
         raise HTTPException(
             status_code=422,
@@ -455,7 +509,7 @@ def predict(applicant: ApplicantInput) -> dict[str, Any]:
                 "unsupported_columns": unsupported,
             },
         )
-    invalid_values = _invalid_model_values(applicant_data)
+    invalid_values = _invalid_model_values(applicant_data, model_version)
     if invalid_values:
         raise HTTPException(
             status_code=422,
@@ -468,18 +522,28 @@ def predict(applicant: ApplicantInput) -> dict[str, Any]:
         safe_applicant = {
             key: value
             for key, value in applicant_data.items()
-            if key in set(model_feature_schema()[0]) | {"application_id", "name"}
+            if key
+            in set(model_feature_schema(model_version)[0])
+            | {"application_id", "name"}
         }
-        probability, _ = prediction_service.predict(safe_applicant)
-        factors = prediction_service.explain(safe_applicant, top_n=5)
+        probability, _ = prediction_service.predict(safe_applicant, model_version)
+        factors = prediction_service.explain(
+            safe_applicant,
+            top_n=5,
+            model_version=model_version,
+        )
     except Exception as exc:
         logger.error("single_prediction_failed error_type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=500,
             detail="Prediction failed with the saved model.",
         ) from exc
-    predicted_class, provisional_classification = _classification(probability)
-    model_features = model_feature_schema()[0]
+    predicted_class, provisional_classification = _classification(
+        probability,
+        model_version,
+    )
+    threshold = _threshold_for_model(model_version)
+    model_features = model_feature_schema(model_version)[0]
     supplied_features = sum(
         applicant_data.get(column) is not None
         for column in model_features
@@ -490,8 +554,8 @@ def predict(applicant: ApplicantInput) -> dict[str, Any]:
         "risk_probability": round(probability, 6),
         "predicted_class": predicted_class,
         "provisional_classification": provisional_classification,
-        "classification_threshold": CLASSIFICATION_THRESHOLD,
-        "model_version": "baseline-v1",
+        "classification_threshold": threshold,
+        "model_version": prediction_service.model_label(model_version),
         "top_factors": factors,
         "feature_coverage": round(supplied_features / len(model_features), 4),
         "missing_model_features": len(model_features) - supplied_features,
@@ -509,6 +573,7 @@ def explain_applicant(request: ExplanationRequest) -> dict[str, Any]:
         request.application_id,
         request.generate_narrative,
         request.provider_consent,
+        request.model_version,
     )
 
 
@@ -543,20 +608,26 @@ def rbi_sources() -> dict[str, Any]:
     "/applications/batch/validate",
     response_model=BatchValidationResponse,
 )
-async def validate_batch(file: UploadFile = File(...)) -> dict[str, Any]:
+async def validate_batch(
+    file: UploadFile = File(...),
+    model_version: ModelVersion = "v1",
+) -> dict[str, Any]:
     try:
         content = await _read_upload(file)
-        parsed = parse_batch_upload(file.filename, content)
+        parsed = parse_batch_upload(file.filename, content, model_version)
     except BatchFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return validation_payload(parsed)
 
 
 @app.post("/predict/batch")
-async def predict_batch(file: UploadFile = File(...)) -> dict[str, Any]:
+async def predict_batch(
+    file: UploadFile = File(...),
+    model_version: ModelVersion = "v1",
+) -> dict[str, Any]:
     try:
         content = await _read_upload(file)
-        parsed = parse_batch_upload(file.filename, content)
+        parsed = parse_batch_upload(file.filename, content, model_version)
     except BatchFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not parsed.valid_schema:
@@ -569,6 +640,9 @@ async def predict_batch(file: UploadFile = File(...)) -> dict[str, Any]:
             },
         )
 
-    response = score_batch(parsed, CLASSIFICATION_THRESHOLD)
+    response = score_batch(
+        parsed,
+        _threshold_for_model(parsed.model_version),
+    )
     response["batch_id"] = str(uuid.uuid4())
     return response

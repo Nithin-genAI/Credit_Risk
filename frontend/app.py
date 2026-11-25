@@ -100,11 +100,13 @@ def initialize_state() -> None:
     st.session_state.setdefault("batch_validation", None)
     st.session_state.setdefault("batch_source_bytes", None)
     st.session_state.setdefault("batch_source_name", None)
+    st.session_state.setdefault("batch_model_version", None)
     st.session_state.setdefault("batch_results", [])
     st.session_state.setdefault("batch_summary", {})
     st.session_state.setdefault("batch_records", {})
     st.session_state.setdefault("current_explanation", None)
     st.session_state.setdefault("current_explanation_applicant", None)
+    st.session_state.setdefault("current_explanation_model_version", "v1")
     st.session_state.setdefault("applicant_chat_histories", {})
     st.session_state.setdefault("rbi_response", None)
 
@@ -121,7 +123,9 @@ def sidebar() -> str:
     st.sidebar.divider()
     st.sidebar.caption("Prediction API")
     st.sidebar.code(API_URL, language=None)
-    st.sidebar.caption("0.15 provisional class threshold · not lending policy")
+    st.sidebar.caption(
+        "V1 / V2 provisional thresholds · not lending policy"
+    )
     return selected
 
 
@@ -239,18 +243,29 @@ def _reset_batch_for_new_file(source_key: str) -> None:
     st.session_state["batch_validation"] = None
     st.session_state["batch_source_bytes"] = None
     st.session_state["batch_source_name"] = None
+    st.session_state["batch_model_version"] = None
     st.session_state["batch_results"] = []
     st.session_state["batch_summary"] = {}
     st.session_state["batch_records"] = {}
 
 
-def _validate_current_upload(upload: Any, content: bytes) -> None:
+def _validate_current_upload(
+    upload: Any,
+    content: bytes,
+    model_version: str,
+) -> None:
     try:
         with st.spinner("Checking file size, schema, values, and row limit…"):
-            response = validate_batch_upload(API_URL, content, upload.name)
+            response = validate_batch_upload(
+                API_URL,
+                content,
+                upload.name,
+                model_version,
+            )
         st.session_state["batch_validation"] = response
         st.session_state["batch_source_bytes"] = content
         st.session_state["batch_source_name"] = upload.name
+        st.session_state["batch_model_version"] = model_version
     except APIError as exc:
         st.session_state["batch_validation"] = None
         st.error(str(exc))
@@ -259,12 +274,13 @@ def _validate_current_upload(upload: Any, content: bytes) -> None:
 def _run_current_batch() -> None:
     content = st.session_state["batch_source_bytes"]
     filename = st.session_state["batch_source_name"]
+    model_version = st.session_state["batch_model_version"] or "v1"
     if content is None or filename is None:
         st.error("Validate the uploaded file before running the assessment.")
         return
     try:
         with st.spinner("Scoring applicants with the saved model…"):
-            result = predict_batch(API_URL, content, filename)
+            result = predict_batch(API_URL, content, filename, model_version)
         frame = pd.read_csv(BytesIO(content)) if Path(filename).suffix.casefold() == ".csv" else pd.read_excel(BytesIO(content), engine="openpyxl")
         results = result["results"]
         records = {
@@ -298,6 +314,7 @@ def _render_batch_results() -> None:
     if not results:
         return
     summary = st.session_state["batch_summary"]
+    st.caption(f"Model used: {summary.get('model_version', 'baseline-v1')}")
     counts = st.columns(3)
     counts[0].metric("Rows", summary.get("total_applications", len(results)))
     counts[1].metric("Scored", summary.get("successful_predictions", 0))
@@ -318,6 +335,7 @@ def _render_batch_results() -> None:
         for column in (
             "row_number",
             "application_id",
+            "model_version",
             "risk_probability",
             "predicted_class",
             "provisional_classification",
@@ -368,9 +386,13 @@ def _render_batch_results() -> None:
                     API_URL,
                     application_id,
                     applicant,
+                    model_version=st.session_state["batch_model_version"] or "v1",
                 )
             st.session_state["current_explanation"] = explanation
             st.session_state["current_explanation_applicant"] = applicant
+            st.session_state["current_explanation_model_version"] = (
+                st.session_state["batch_model_version"] or "v1"
+            )
             st.session_state["pending_view"] = "Applicant Explanation"
             st.rerun()
         except APIError as exc:
@@ -379,6 +401,22 @@ def _render_batch_results() -> None:
 
 def render_application_review() -> None:
     st.subheader("Application Review & Batch Processing")
+    model_version = st.selectbox(
+        "Prediction model",
+        ["v1", "v2"],
+        format_func=lambda value: (
+            "V1 — Baseline" if value == "v1" else "V2 — 129-feature model"
+        ),
+        key="model_version_selector",
+    )
+    health, _ = api_health()
+    if health:
+        threshold = health.get("model_thresholds", {}).get(model_version)
+        if threshold is not None:
+            st.caption(
+                f"Selected model's provisional threshold: {threshold:.2f} · "
+                "demonstration setting, not lending policy."
+            )
     st.write(
         "Upload a CSV or XLSX using the saved model's feature contract. The API "
         "reports missing and unsupported columns before scoring; optional missing "
@@ -392,14 +430,15 @@ def render_application_review() -> None:
     if upload is not None:
         content = upload.getvalue()
         source_key = hashlib.sha256(
-            f"{upload.name}:{len(content)}:".encode("utf-8") + content
+            f"{upload.name}:{len(content)}:{model_version}:".encode("utf-8")
+            + content
         ).hexdigest()
         _reset_batch_for_new_file(source_key)
         st.caption(
             f"{Path(upload.name).name} · {len(content) / 1024:.1f} KB"
         )
         if st.button("Validate file", type="primary"):
-            _validate_current_upload(upload, content)
+            _validate_current_upload(upload, content, model_version)
 
         validation = st.session_state["batch_validation"]
         if validation:
@@ -485,6 +524,10 @@ def render_explanation() -> None:
             "open its explanation."
         )
         return
+    model_version = st.session_state.get(
+        "current_explanation_model_version",
+        "v1",
+    )
     st.caption(f"Applicant reference: {result['application_id']}")
     cards = st.columns(3)
     cards[0].metric(
@@ -550,6 +593,7 @@ def render_explanation() -> None:
                             st.session_state["current_explanation_applicant"] or {},
                             generate_narrative=True,
                             provider_consent=True,
+                            model_version=model_version,
                         )
                     st.session_state["current_explanation"] = updated
                     st.rerun()
@@ -617,6 +661,7 @@ def render_explanation() -> None:
     context_key = applicant_chat_context_key(
         result["application_id"],
         applicant,
+        model_version,
     )
     chat_store = st.session_state["applicant_chat_histories"]
     turns = chat_store.setdefault(context_key, [])
@@ -682,6 +727,7 @@ def render_explanation() -> None:
                         "applicant" if audience == "Applicant" else "loan_officer",
                         history=history,
                         provider_consent=consent,
+                        model_version=model_version,
                     )
                 turns.append({"role": "user", "content": question.strip()})
                 turns.append(

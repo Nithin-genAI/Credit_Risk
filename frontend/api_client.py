@@ -86,11 +86,13 @@ def validate_batch_upload(
     base_url: str,
     content: bytes,
     filename: str,
+    model_version: str = "v1",
 ) -> dict[str, Any]:
     result = _json_request(
         "POST",
         f"{base_url.rstrip('/')}/applications/batch/validate",
         timeout=BATCH_TIMEOUT_SECONDS,
+        params={"model_version": model_version},
         files={"file": (Path(filename).name, BytesIO(content))},
     )
     required = {
@@ -109,10 +111,15 @@ def validate_batch_upload(
     return result
 
 
-def predict_applicant(base_url: str, applicant: dict[str, Any]) -> dict[str, Any]:
+def predict_applicant(
+    base_url: str,
+    applicant: dict[str, Any],
+    model_version: str = "v1",
+) -> dict[str, Any]:
     result = _json_request(
         "POST",
         f"{base_url.rstrip('/')}/predict",
+        params={"model_version": model_version},
         json=applicant,
     )
     required = {
@@ -138,11 +145,17 @@ def predict_applicant(base_url: str, applicant: dict[str, Any]) -> dict[str, Any
     return result
 
 
-def predict_batch(base_url: str, content: bytes, filename: str) -> dict[str, Any]:
+def predict_batch(
+    base_url: str,
+    content: bytes,
+    filename: str,
+    model_version: str = "v1",
+) -> dict[str, Any]:
     result = _json_request(
         "POST",
         f"{base_url.rstrip('/')}/predict/batch",
         timeout=BATCH_TIMEOUT_SECONDS,
+        params={"model_version": model_version},
         files={"file": (Path(filename).name, BytesIO(content))},
     )
     if (
@@ -181,6 +194,7 @@ def explain_applicant(
     *,
     generate_narrative: bool = False,
     provider_consent: bool = False,
+    model_version: str = "v1",
 ) -> dict[str, Any]:
     result = _json_request(
         "POST",
@@ -190,6 +204,7 @@ def explain_applicant(
             "applicant": applicant,
             "generate_narrative": generate_narrative,
             "provider_consent": provider_consent,
+            "model_version": model_version,
         },
         timeout=BATCH_TIMEOUT_SECONDS,
     )
@@ -209,11 +224,13 @@ def explain_applicant(
 def applicant_chat_context_key(
     application_id: str,
     applicant: dict[str, Any],
+    model_version: str = "v1",
 ) -> str:
     """Create a local-only key so chats stay isolated to one applicant record."""
     payload = json.dumps(
         {
             "application_id": application_id,
+            "model_version": model_version,
             "applicant": applicant_record_from_mapping(applicant),
         },
         sort_keys=True,
@@ -231,6 +248,7 @@ def chat_about_applicant(
     *,
     history: list[dict[str, str]] | None = None,
     provider_consent: bool = False,
+    model_version: str = "v1",
 ) -> dict[str, Any]:
     result = _json_request(
         "POST",
@@ -241,6 +259,7 @@ def chat_about_applicant(
             "audience": audience,
             "history": history or [],
             "provider_consent": provider_consent,
+            "model_version": model_version,
         },
         timeout=BATCH_TIMEOUT_SECONDS,
     )

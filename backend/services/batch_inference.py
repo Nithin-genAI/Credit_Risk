@@ -14,7 +14,10 @@ from openpyxl import load_workbook
 from openpyxl.worksheet._read_only import ReadOnlyWorksheet
 
 from backend.settings import MAX_BATCH_ROWS, MAX_UPLOAD_BYTES, MAX_UPLOAD_COLUMNS
-from backend.services.prediction_service import engineer_features, prediction_service
+from backend.services.prediction_service import (
+    ENGINEERED_FEATURES,
+    prediction_service,
+)
 
 
 REQUIRED_FEATURES = {
@@ -30,20 +33,6 @@ ALIASES = {
     "applicant name": "name",
 }
 MAX_VALIDATION_ISSUES = 100
-ENGINEERED_FEATURES = {
-    "AGE_YEARS",
-    "EMPLOYED_YEARS",
-    "CREDIT_TO_INCOME",
-    "ANNUITY_TO_INCOME",
-    "CREDIT_TO_ANNUITY",
-    "GOODS_TO_CREDIT",
-    "INCOME_PER_FAMILY_MEMBER",
-    "INCOME_PER_CHILD",
-    "EXT_SOURCE_MEAN",
-    "EXT_SOURCE_MAX",
-}
-
-
 class BatchFileError(ValueError):
     """An upload cannot be safely parsed or does not satisfy the file contract."""
 
@@ -63,41 +52,28 @@ class ParsedBatch:
     row_issues: list[dict[str, Any]]
     row_issue_count: int
     missing_value_counts: dict[str, int]
+    model_version: str = "v1"
 
     @property
     def valid_schema(self) -> bool:
         return not self.duplicate_columns and not self.missing_required_columns
 
 
-def model_feature_schema() -> tuple[list[str], list[str], set[str]]:
+def model_feature_schema(
+    model_version: str = "v1",
+) -> tuple[list[str], list[str], set[str]]:
     """Return ordered original feature names and numeric/categorical subsets."""
-    ordered_expected = [
-        column
-        for column in prediction_service.expected_columns
-        if column not in ENGINEERED_FEATURES
-    ]
-    numeric = [
-        column
-        for name, _, columns in prediction_service.preprocessor.transformers_
-        if name == "num"
-        for column in columns
-        if column not in ENGINEERED_FEATURES
-    ]
-    categorical = [
-        column
-        for name, _, columns in prediction_service.preprocessor.transformers_
-        if name == "cat"
-        for column in columns
-        if column not in ENGINEERED_FEATURES
-    ]
-    if len(ordered_expected) != 120:
+    bundle = prediction_service.get_model(model_version)
+    ordered_expected = list(bundle.raw_feature_columns)
+    numeric = list(bundle.numeric_features)
+    categorical = set(bundle.categorical_features)
+    if not ordered_expected:
         raise RuntimeError(
-            f"Saved model input contract expected 120 original features, "
-            f"found {len(ordered_expected)}."
+            f"Saved model input contract is empty for {model_version}."
         )
-    if set(ordered_expected) != set(numeric) | set(categorical):
+    if set(ordered_expected) != set(numeric) | categorical:
         raise RuntimeError("Saved preprocessor raw-feature schema is inconsistent.")
-    return ordered_expected, numeric, set(categorical)
+    return ordered_expected, numeric, categorical
 
 
 def canonicalize_column(name: Any, recognized: set[str]) -> str:
@@ -173,7 +149,11 @@ def _read_xlsx(content: bytes) -> tuple[pd.DataFrame, list[str]]:
     return frame, headers
 
 
-def parse_batch_upload(filename: str | None, content: bytes) -> ParsedBatch:
+def parse_batch_upload(
+    filename: str | None,
+    content: bytes,
+    model_version: str = "v1",
+) -> ParsedBatch:
     if not filename:
         raise BatchFileError("A filename is required.")
     if len(content) > MAX_UPLOAD_BYTES:
@@ -194,7 +174,10 @@ def parse_batch_upload(filename: str | None, content: bytes) -> ParsedBatch:
     if frame.empty:
         raise BatchFileError("The uploaded file contains no applicant rows.")
 
-    model_columns, numeric_columns, categorical_columns = model_feature_schema()
+    model_version = prediction_service.normalize_version(model_version)
+    model_columns, numeric_columns, categorical_columns = model_feature_schema(
+        model_version
+    )
     recognized = set(model_columns) | METADATA_FIELDS | {TARGET_FIELD}
     normalized = [
         canonicalize_column(column, recognized) for column in original_columns
@@ -304,13 +287,15 @@ def parse_batch_upload(filename: str | None, content: bytes) -> ParsedBatch:
         row_issues=row_issues,
         row_issue_count=row_issue_count,
         missing_value_counts=missing_value_counts,
+        model_version=model_version,
     )
 
 
 def validation_payload(parsed: ParsedBatch) -> dict[str, Any]:
-    model_columns, _, _ = model_feature_schema()
+    model_columns, _, _ = model_feature_schema(parsed.model_version)
     included = [column for column in model_columns if column in parsed.frame]
     return {
+        "model_version": prediction_service.model_label(parsed.model_version),
         "valid": parsed.valid_schema and parsed.row_issue_count == 0,
         "file_type": parsed.file_type,
         "row_count": len(parsed.frame),
@@ -354,7 +339,9 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
             "Required batch schema is invalid: "
             + ", ".join(parsed.missing_required_columns + parsed.duplicate_columns)
         )
-    model_columns, _, _ = model_feature_schema()
+    model_version = parsed.model_version
+    bundle = prediction_service.get_model(model_version)
+    model_columns, _, _ = model_feature_schema(model_version)
     results: list[dict[str, Any] | None] = [None] * len(parsed.frame)
     valid_positions: list[int] = []
     valid_rows: list[dict[str, Any]] = []
@@ -376,6 +363,7 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
             "classification_threshold": threshold,
             "feature_coverage": 0.0,
             "missing_model_features": len(model_columns),
+            "model_version": bundle.label,
             "status": "ERROR",
             "error": None,
         }
@@ -399,28 +387,16 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
         result["feature_coverage"] = round(provided_count / len(model_columns), 4)
         result["missing_model_features"] = len(model_columns) - provided_count
         valid_positions.append(position)
-        valid_rows.append(
-            {
-                column: applicant.get(column, np.nan)
-                for column in prediction_service.expected_columns
-            }
-        )
+        valid_rows.append(applicant)
         results[position] = result
 
     if valid_rows:
-        feature_frame = pd.DataFrame(
-            valid_rows,
-            columns=prediction_service.expected_columns,
+        feature_frame = prediction_service.prepare_frame(
+            pd.DataFrame(valid_rows, columns=model_columns),
+            model_version,
         )
-        if "DAYS_EMPLOYED" in feature_frame.columns:
-            feature_frame["DAYS_EMPLOYED"] = feature_frame[
-                "DAYS_EMPLOYED"
-            ].replace(365243, np.nan)
-        engineered_frame = engineer_features(feature_frame)
-        processed = prediction_service.preprocessor.transform(
-            engineered_frame.loc[:, prediction_service.expected_columns]
-        )
-        probabilities = prediction_service.model.predict_proba(processed)[:, 1]
+        processed = bundle.preprocessor.transform(feature_frame)
+        probabilities = bundle.model.predict_proba(processed)[:, 1]
         if len(probabilities) != len(valid_positions):
             raise RuntimeError("Batch prediction count did not match valid input rows.")
 
@@ -455,6 +431,7 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
         "total_applications": len(aligned_results),
         "successful_predictions": successful,
         "failed_predictions": len(aligned_results) - successful,
+        "model_version": bundle.label,
         "classification_threshold": threshold,
         "feature_warnings": validation_payload(parsed)["warnings"],
         "schema_validation": validation_payload(parsed),

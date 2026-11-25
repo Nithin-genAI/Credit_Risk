@@ -11,7 +11,9 @@ from frontend.api_client import (
     applicant_record_from_mapping,
     chat_about_applicant,
     encode_batch_frame,
+    predict_batch,
     sanitize_batch_csv,
+    validate_batch_upload,
 )
 
 
@@ -67,6 +69,46 @@ def test_xlsx_serializer_preserves_upload_extension():
 
     assert filename == "applications.xlsx"
     assert content[:2] == b"PK"
+
+
+def test_batch_client_passes_selected_model_to_validation_and_scoring(monkeypatch):
+    validation_response = Mock()
+    validation_response.ok = True
+    validation_response.status_code = 200
+    validation_response.json.return_value = {
+        "valid": True,
+        "file_type": "csv",
+        "row_count": 1,
+        "missing_required_columns": [],
+        "missing_optional_model_columns": [],
+        "duplicate_columns": [],
+        "unsupported_columns": [],
+        "row_issue_count": 0,
+        "warnings": [],
+    }
+    batch_response = Mock()
+    batch_response.ok = True
+    batch_response.status_code = 200
+    batch_response.json.return_value = {
+        "results": [
+            {
+                "row_number": 2,
+                "application_id": "APP-1",
+                "status": "scored",
+            }
+        ],
+        "total_applications": 1,
+        "successful_predictions": 1,
+        "failed_predictions": 0,
+    }
+    request = Mock(side_effect=[validation_response, batch_response])
+    monkeypatch.setattr("frontend.api_client.requests.request", request)
+
+    validate_batch_upload("http://api.test", b"data", "applicants.csv", "v2")
+    predict_batch("http://api.test", b"data", "applicants.csv", "v2")
+
+    assert request.call_args_list[0].kwargs["params"] == {"model_version": "v2"}
+    assert request.call_args_list[1].kwargs["params"] == {"model_version": "v2"}
 
 
 def test_batch_sanitizer_requires_backend_required_columns():
@@ -143,6 +185,11 @@ def test_applicant_chat_context_keys_are_record_specific():
 
     assert first != second
     assert first != changed_record
+    assert first != applicant_chat_context_key(
+        "APP-1",
+        {"AMT_INCOME_TOTAL": 100000, "DAYS_BIRTH": -12000},
+        "v2",
+    )
     assert first == applicant_chat_context_key(
         "APP-1",
         {"DAYS_BIRTH": -12000, "AMT_INCOME_TOTAL": 100000},
@@ -174,6 +221,7 @@ def test_applicant_chat_client_excludes_identifiers_and_target(monkeypatch):
         "Why did this happen?",
         "applicant",
         history=[{"role": "user", "content": "Earlier question"}],
+        model_version="v2",
     )
 
     sent = request.call_args.kwargs["json"]
@@ -187,3 +235,4 @@ def test_applicant_chat_client_excludes_identifiers_and_target(monkeypatch):
     assert "PRIVATE-NAME" not in str(sent)
     assert "TARGET" not in str(sent)
     assert sent["history"] == [{"role": "user", "content": "Earlier question"}]
+    assert sent["model_version"] == "v2"

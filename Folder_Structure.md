@@ -9,8 +9,8 @@ Credit_Risk/
 |   |-- schemas.py                          # Request and response schema validation
 |   |-- settings.py                         # Threshold, upload, LLM, and query configuration
 |   |-- services/
-|   |   |-- prediction_service.py           # Loads artifacts, prepares inputs, predicts, and explains
-|   |   |-- batch_inference.py              # CSV/XLSX contract checks and aligned batch scoring
+|   |   |-- prediction_service.py           # Cached V1/V2 artifact pairs, inference, and SHAP
+|   |   |-- batch_inference.py              # Version-aware CSV/XLSX checks and aligned scoring
 |   |   |-- llm_client.py                   # Optional backend-only OpenAI-compatible LLM client
 |   |   `-- rbi_assistant.py                # RBI excerpt retrieval, citations, and abstention
 |   `-- tests/
@@ -155,10 +155,12 @@ probabilities are saved as `fine_tuning/artifacts/v2_oof_predictions.csv`
 when analysis completes. These development results do not replace held-out
 test evaluation or establish an approved lending threshold.
 
-V2's model and preprocessor are separate from the API for now: the backend
-still loads V1 artifacts from `models/`. V2's metrics, feature ranking, and
-reference state therefore do not describe the model currently serving
-predictions. The V2 reference state is prepared for future monitoring; drift
+The API supports both model versions and defaults to V1 for existing clients.
+The selected version is used consistently for batch validation, scoring,
+applicant explanations, and applicant chat. V1 artifacts are loaded from
+`models/`; the V2 model and matching preprocessor are loaded from
+`fine_tuning/artifacts/` and cached separately. Their thresholds are configured
+independently. The V2 reference state is prepared for future monitoring; drift
 detection is not implemented.
 
 Generated environments and caches (for example `.venv/`, `__pycache__/`, and
