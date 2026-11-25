@@ -1,0 +1,9 @@
+{
+    "model": "XGBoost",
+    "features": 129,
+    "n_estimators": 351,
+    "roc_auc": 0.7703,
+    "average_precision": 0.2565,
+    "test_rows": 46127,
+    "training_rows": 261384
+}
