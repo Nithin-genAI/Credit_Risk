@@ -1,4 +1,4 @@
-﻿# Drifting Oracle  Django
+﻿# Drifting Oracle  
 
 Drifting Oracle is a credit-default modeling prototype built from the Home
 Credit Default Risk benchmark. V1 predicts the probability of `TARGET = 1`
@@ -22,6 +22,8 @@ banking system.
   alignment.
 - `backend/services/drift_monitor.py`: best-effort local prediction logging and
   V1/V2 reference-based drift reports.
+- `backend/services/admin_auth.py`: bcrypt credential checks, signed API
+  sessions, and process-local login throttling.
 - `backend/services/rbi_assistant.py`: retrieves relevant excerpts from the
   locally generated, allowlisted RBI source index and abstains when evidence or
   source currency is insufficient.
@@ -49,6 +51,17 @@ Use Python 3.13+ and install the repository dependencies:
 ```powershell
 python -m pip install -r requirements.txt
 ```
+
+For a one-command macOS setup and launch:
+
+```bash
+chmod +x scripts/start_mac.sh
+./scripts/start_mac.sh
+```
+
+The script creates and activates `.venv`, installs `requirements.txt`, warns
+when `.env` is missing, then starts FastAPI on port 8000 and Streamlit on port
+8501. Press Ctrl+C to stop both services.
 
 To recreate the demo records (requires `data/application_train.csv`):
 
@@ -119,6 +132,49 @@ SHAP results. Restart the backend after changing `.env`.
 Health flags indicate key presence, not successful provider access; live
 search failures are reported when a request is made, and the assistant abstains
 when it cannot obtain verified official citations.
+
+### Admin authentication
+
+The Streamlit dashboard is hidden until an admin signs in. Configure admin
+authentication in the repository-root `.env` before launch. The backend reads
+`DRIFTING_ORACLE_ADMIN_CREDENTIALS_JSON`, a JSON object mapping usernames to
+bcrypt hashes, and `DRIFTING_ORACLE_ADMIN_TOKEN_SECRET`, a random signing
+secret of at least 32 bytes. Generate a password hash without echoing the
+password:
+
+```bash
+python -c "import bcrypt, getpass; print(bcrypt.hashpw(getpass.getpass('New admin password: ').encode(), bcrypt.gensalt(rounds=12)).decode())"
+```
+
+Generate the token secret with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Set the generated values in `.env`, for example:
+
+```dotenv
+DRIFTING_ORACLE_ADMIN_CREDENTIALS_JSON='{"analyst":"<paste-bcrypt-hash-here>"}'
+DRIFTING_ORACLE_ADMIN_TOKEN_SECRET=<paste-generated-secret-here>
+DRIFTING_ORACLE_ADMIN_TOKEN_TTL_SECONDS=28800
+```
+
+Never put plaintext passwords or real credential hashes in `.env.example` or
+Git. `/auth/users` provides the username choices and `/auth/login` exchanges a
+valid username/password for a short-lived bearer token. All business API
+routes require that token; `/docs` and `/openapi.json` remain public, but
+requests made from the docs still need authorization. Use the Swagger
+Authorize control with a token returned by `/auth/login`.
+
+This is a custom, minimal admin gate, not a complete bank identity system. It
+does not provide SSO, MFA, password reset, centralized account revocation, or
+audit-grade login storage. Failed-login throttling is in-memory per API process
+and resets on restart; multiple workers do not share its counters. Streamlit
+logout clears its server-side session, while a copied bearer token remains
+valid until expiry. Use HTTPS, protect environment secrets, and replace this
+approach with managed identity and shared rate limiting before production
+bank use.
 
 External AI requests require explicit user consent. Applicant chat sends only
 the user's question, bounded recent chat turns, predicted probability/class,

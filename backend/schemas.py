@@ -1,9 +1,14 @@
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 ModelVersion = Literal["v1", "v2"]
+
+
+class AdminLogin(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    password: SecretStr = Field(..., min_length=1, max_length=256)
 
 
 class ApplicantInput(BaseModel):

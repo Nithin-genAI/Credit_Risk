@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from contextvars import ContextVar
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -40,10 +41,18 @@ REQUIRED_BATCH_FIELDS = {
 }
 API_TIMEOUT_SECONDS = 12
 BATCH_TIMEOUT_SECONDS = 120
+_ACCESS_TOKEN: ContextVar[str | None] = ContextVar(
+    "drifting_oracle_api_access_token",
+    default=None,
+)
 
 
 class APIError(RuntimeError):
     """A backend request failed or returned an invalid response."""
+
+
+def set_api_access_token(access_token: str | None) -> None:
+    _ACCESS_TOKEN.set(access_token)
 
 
 def _json_request(
@@ -51,8 +60,14 @@ def _json_request(
     url: str,
     *,
     timeout: int = API_TIMEOUT_SECONDS,
+    authenticated: bool = True,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    access_token = _ACCESS_TOKEN.get()
+    if authenticated and access_token:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["Authorization"] = f"Bearer {access_token}"
+        kwargs["headers"] = headers
     try:
         response = requests.request(
             method,
@@ -76,6 +91,43 @@ def _json_request(
     if not isinstance(payload, dict):
         raise APIError("The prediction API response must be a JSON object.")
     return payload
+
+
+def get_admin_users(base_url: str) -> list[str]:
+    result = _json_request(
+        "GET",
+        f"{base_url.rstrip('/')}/auth/users",
+        authenticated=False,
+    )
+    usernames = result.get("usernames")
+    if (
+        not isinstance(usernames, list)
+        or not usernames
+        or any(not isinstance(username, str) or not username for username in usernames)
+    ):
+        raise APIError("The admin username list is invalid.")
+    return usernames
+
+
+def login_admin(
+    base_url: str,
+    username: str,
+    password: str,
+) -> dict[str, Any]:
+    result = _json_request(
+        "POST",
+        f"{base_url.rstrip('/')}/auth/login",
+        json={"username": username, "password": password},
+        authenticated=False,
+    )
+    if (
+        not isinstance(result.get("access_token"), str)
+        or result.get("token_type") != "bearer"
+        or not isinstance(result.get("expires_in"), int)
+        or result["expires_in"] <= 0
+    ):
+        raise APIError("The admin login response is invalid.")
+    return result
 
 
 def get_health(base_url: str) -> dict[str, Any]:

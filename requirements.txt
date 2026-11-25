@@ -15,3 +15,5 @@ pytest>=8,<10
 httpx2>=0.1
 openpyxl>=3.1,<4
 python-dotenv>=1,<2
+bcrypt>=4.2,<5
+itsdangerous>=2.2,<3

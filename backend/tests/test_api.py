@@ -1,4 +1,5 @@
 import json
+import secrets
 import sqlite3
 from contextlib import closing
 from io import BytesIO
@@ -7,15 +8,24 @@ from unittest.mock import Mock
 
 import pandas as pd
 import pytest
+import bcrypt
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services import admin_auth
 from backend.services.batch_inference import model_feature_schema
 from backend.services.drift_monitor import DriftMonitor
 from backend.services.prediction_service import prediction_service
 
 
 client = TestClient(app)
+_TEST_USERNAME = "test-" + secrets.token_hex(4)
+_TEST_PASSWORD = secrets.token_urlsafe(24)
+_TEST_PASSWORD_HASH = bcrypt.hashpw(
+    _TEST_PASSWORD.encode("utf-8"),
+    bcrypt.gensalt(rounds=12),
+).decode("ascii")
+_TEST_TOKEN_SECRET = secrets.token_urlsafe(32)
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +33,20 @@ def disable_external_providers_for_api_tests(
     monkeypatch,
     tmp_path,
 ):
+    monkeypatch.setattr(
+        admin_auth,
+        "ADMIN_CREDENTIALS_JSON",
+        json.dumps({_TEST_USERNAME: _TEST_PASSWORD_HASH}),
+    )
+    monkeypatch.setattr(
+        admin_auth,
+        "ADMIN_TOKEN_SECRET",
+        _TEST_TOKEN_SECRET,
+    )
+    admin_auth.reset_login_limits()
+    client.headers["Authorization"] = (
+        f"Bearer {admin_auth.create_access_token(_TEST_USERNAME)}"
+    )
     monitor = DriftMonitor(tmp_path / "monitor.sqlite3")
     monkeypatch.setattr("backend.services.drift_monitor.drift_monitor", monitor)
     monkeypatch.setattr("backend.services.batch_inference.drift_monitor", monitor)
@@ -31,7 +55,57 @@ def disable_external_providers_for_api_tests(
     monkeypatch.setattr("backend.main.GROQ_API_KEY_2", "")
     monkeypatch.setattr("backend.main.GEMINI_API_KEY", "")
     monkeypatch.setattr("backend.services.rbi_assistant.GEMINI_API_KEY", "")
-    return monitor
+    yield monitor
+    client.headers.pop("Authorization", None)
+    admin_auth.reset_login_limits()
+
+
+def test_admin_login_and_protected_api_access():
+    anonymous_client = TestClient(app)
+
+    users = anonymous_client.get("/auth/users")
+    unauthorized = anonymous_client.get("/health")
+    invalid_token = anonymous_client.get(
+        "/health",
+        headers={"Authorization": "Bearer invalid-token"},
+    )
+    login = anonymous_client.post(
+        "/auth/login",
+        json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD},
+    )
+
+    assert users.status_code == 200
+    assert users.json() == {"usernames": [_TEST_USERNAME]}
+    assert unauthorized.status_code == 401
+    assert invalid_token.status_code == 401
+    assert login.status_code == 200
+    assert login.json()["token_type"] == "bearer"
+    protected = anonymous_client.get(
+        "/health",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+    assert protected.status_code == 200
+
+
+def test_admin_login_rate_limits_repeated_failures():
+    anonymous_client = TestClient(app)
+    wrong_password = secrets.token_urlsafe(24)
+    for _ in range(admin_auth.MAX_LOGIN_FAILURES):
+        response = anonymous_client.post(
+            "/auth/login",
+            json={
+                "username": _TEST_USERNAME,
+                "password": wrong_password,
+            },
+        )
+        assert response.status_code == 401
+
+    limited = anonymous_client.post(
+        "/auth/login",
+        json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD},
+    )
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"] == "900"
 
 
 def test_health():

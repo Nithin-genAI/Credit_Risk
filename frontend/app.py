@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,11 @@ from frontend.api_client import (
     get_drift_report,
     get_drift_status,
     get_health,
+    get_admin_users,
     get_regulatory_sources,
+    login_admin,
     predict_batch,
+    set_api_access_token,
     validate_batch_upload,
 )
 
@@ -116,8 +120,69 @@ def initialize_state() -> None:
     st.session_state.setdefault("show_drift_report", False)
 
 
+def clear_admin_session() -> None:
+    st.session_state.clear()
+    set_api_access_token(None)
+
+
+def render_admin_login() -> None:
+    if st.session_state.pop("clear_admin_login_password", False):
+        st.session_state.pop("admin_login_password", None)
+    login_error = st.session_state.pop("admin_login_error", None)
+    st.markdown(
+        """
+        <div class="oracle-banner">
+          <div class="oracle-kicker">Drifting Oracle · Secure access</div>
+          <h1 style="margin:5px 0 0">Admin sign in</h1>
+          <div class="oracle-subtitle">Authorized bank personnel only</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if login_error:
+        st.error(login_error)
+    try:
+        usernames = get_admin_users(API_URL)
+    except APIError as exc:
+        st.error(f"Admin sign-in is unavailable: {exc}")
+        return
+
+    with st.form("admin_login_form"):
+        username = st.selectbox(
+            "Username",
+            usernames,
+            key="admin_login_username",
+        )
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="admin_login_password",
+        )
+        submitted = st.form_submit_button("Log in", type="primary")
+
+    if submitted:
+        try:
+            session = login_admin(API_URL, username, password)
+        except APIError as exc:
+            st.session_state["admin_login_error"] = f"Sign-in failed: {exc}"
+            st.session_state["clear_admin_login_password"] = True
+            st.rerun()
+        clear_admin_session()
+        st.session_state["admin_username"] = username
+        st.session_state["admin_access_token"] = session["access_token"]
+        st.session_state["admin_expires_at"] = (
+            time.time() + session["expires_in"]
+        )
+        set_api_access_token(session["access_token"])
+        st.rerun()
+
+
 def sidebar() -> str:
     st.sidebar.markdown("### ◈ Drifting Oracle")
+    st.sidebar.caption(f"Signed in as {st.session_state['admin_username']}")
+    if st.sidebar.button("Log out", key="admin_logout"):
+        clear_admin_session()
+        st.rerun()
     st.sidebar.caption("MODEL RISK · V1 BASELINE")
     selected = st.sidebar.radio(
         "Workspace",
@@ -1110,6 +1175,22 @@ def render_rbi_assistant() -> None:
 
 def main() -> None:
     load_theme()
+    access_token = st.session_state.get("admin_access_token")
+    expires_at = st.session_state.get("admin_expires_at", 0)
+    if not access_token:
+        set_api_access_token(None)
+        render_admin_login()
+        return
+    if (
+        not isinstance(access_token, str)
+        or not isinstance(expires_at, (int, float))
+        or time.time() >= expires_at
+        or not st.session_state.get("admin_username")
+    ):
+        clear_admin_session()
+        render_admin_login()
+        return
+    set_api_access_token(access_token)
     initialize_state()
     page = sidebar()
     header()

@@ -1,10 +1,21 @@
 from pathlib import Path
+import secrets
 from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
+_TEST_USERNAME = "test-" + secrets.token_hex(4)
+_TEST_PASSWORD = secrets.token_urlsafe(16)
+
+
+def _authenticated_app() -> AppTest:
+    app = AppTest.from_file(str(APP_PATH))
+    app.session_state["admin_username"] = _TEST_USERNAME
+    app.session_state["admin_access_token"] = "test-token"
+    app.session_state["admin_expires_at"] = 4_000_000_000
+    return app
 
 
 def _health() -> dict:
@@ -87,7 +98,7 @@ def test_drift_status_opens_versioned_report_dialog_and_close_returns_to_dashboa
         patch("frontend.api_client.get_drift_status", status_request),
         patch("frontend.api_client.get_drift_report", report_request),
     ):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = _authenticated_app().run()
         app.selectbox(key="drift_model_version").set_value("v2").run()
 
         assert status_request.call_args.args == ("http://127.0.0.1:8000", "v2")
@@ -112,4 +123,47 @@ def test_drift_status_opens_versioned_report_dialog_and_close_returns_to_dashboa
             timeout=15
         )
         assert not any(button.label == "Analyze now" for button in app.button)
+        assert not app.exception
+
+
+def test_admin_login_and_logout_gate_dashboard():
+    login_request = Mock(
+        return_value={
+            "access_token": "authenticated-token",
+            "token_type": "bearer",
+            "expires_in": 3_600,
+        }
+    )
+    with (
+        patch("frontend.api_client.get_health", return_value=_health()),
+        patch("frontend.api_client.get_drift_status", return_value=_status()),
+        patch(
+            "frontend.api_client.get_admin_users",
+            return_value=[_TEST_USERNAME],
+        ),
+        patch("frontend.api_client.login_admin", login_request),
+    ):
+        app = AppTest.from_file(str(APP_PATH)).run()
+        assert any("Admin sign in" in element.value for element in app.markdown)
+        assert not app.sidebar.radio
+
+        assert app.selectbox(key="admin_login_username").value == _TEST_USERNAME
+        app.text_input(key="admin_login_password").set_value(_TEST_PASSWORD)
+        next(button for button in app.button if button.label == "Log in").click().run()
+
+        login_request.assert_called_once_with(
+            "http://127.0.0.1:8000",
+            _TEST_USERNAME,
+            _TEST_PASSWORD,
+        )
+        assert app.session_state["admin_username"] == _TEST_USERNAME
+        assert app.session_state["admin_access_token"] == "authenticated-token"
+        assert "admin_login_password" not in app.session_state
+        assert any(button.label == "Log out" for button in app.button)
+        assert not app.exception
+
+        next(button for button in app.button if button.label == "Log out").click().run()
+        assert "admin_access_token" not in app.session_state
+        assert any("Admin sign in" in element.value for element in app.markdown)
+        assert not app.sidebar.radio
         assert not app.exception

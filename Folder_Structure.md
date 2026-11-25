@@ -5,17 +5,18 @@ Credit_Risk/
 |-- .streamlit/
 |   `-- config.toml                         # Streamlit theme and app configuration
 |-- backend/
-|   |-- main.py                             # Prediction, drift, batch, explain, and RBI API routes
+|   |-- main.py                             # Auth, prediction, drift, batch, explain, and RBI routes
 |   |-- schemas.py                          # Request and response schema validation
-|   |-- settings.py                         # Threshold, monitoring, upload, LLM, and query settings
+|   |-- settings.py                         # Auth, threshold, monitoring, upload, and LLM settings
 |   |-- services/
+|   |   |-- admin_auth.py                   # Bcrypt admin authentication and signed sessions
 |   |   |-- prediction_service.py           # Cached V1/V2 artifact pairs, inference, and SHAP
 |   |   |-- batch_inference.py              # Version-aware CSV/XLSX checks and aligned scoring
 |   |   |-- drift_monitor.py                # Local prediction logging and reference-based metrics
 |   |   |-- llm_client.py                   # Optional backend-only OpenAI-compatible LLM client
 |   |   `-- rbi_assistant.py                # RBI excerpt retrieval, citations, and abstention
 |   `-- tests/
-|       |-- test_api.py                     # API and batch behavior tests
+|       |-- test_api.py                     # Admin auth, API, and batch behavior tests
 |       |-- test_drift_monitor.py            # Drift metrics, privacy filtering, and local storage
 |       `-- test_assistants.py              # RBI evidence and citation behavior tests
 |-- data/
@@ -32,8 +33,8 @@ Credit_Risk/
 |   |-- app.py                              # Streamlit views, drift status, and report dialog
 |   |-- api_client.py                       # Frontend calls and validation for the FastAPI service
 |   `-- tests/
-|       |-- test_app.py                     # Drift status/report dialog interaction
-|       `-- test_api_client.py              # API client and upload preparation tests
+|       |-- test_app.py                     # Login/logout and protected dashboard interactions
+|       `-- test_api_client.py              # Authenticated API calls and upload preparation
 |-- models/
 |   |-- baseline_xgboost.joblib             # Trained V1 XGBoost classifier
 |   |-- baseline_preprocessor.joblib        # Saved preprocessing pipeline used during training
@@ -42,6 +43,7 @@ Credit_Risk/
 |   |-- baseline_shap_importance.csv        # Global SHAP feature importance values
 |   `-- reference_distribution.json         # V1 numeric/categorical drift reference state
 |-- scripts/
+|   |-- start_mac.sh                         # Create environment and start API/UI together
 |   |-- create_demo_applicants.py           # Rebuilds demo_applicants.csv reproducibly
 |   |-- split_application_test.py           # Creates two consecutive 100-row test batches
 |   `-- ingest_rbi_sources.py               # Builds the local index from allowlisted RBI pages
@@ -54,6 +56,7 @@ Credit_Risk/
 |   `-- 06_reference_state.ipynb             # Reference data and monitoring artifacts
 |-- testing/
 |   |-- __init__.py                           # Makes diagnostics importable for tests
+|   |-- test_start_mac_script.py             # Startup setup and process cleanup behavior
 |   |-- evaluate_saved_baseline.py            # Reconstructs validation split and diagnoses saved model
 |   |-- test_evaluate_saved_baseline.py       # Verifies generated diagnostic outputs and alignment
 |   |-- analyze_thresholds.py                 # Compares fixed cutoffs on diagnostic validation
@@ -98,6 +101,11 @@ Credit_Risk/
 |-- requirements.txt                        # Python dependencies
 `-- Folder_Structure.md                     # This project structure guide
 ```
+
+Admin credentials are bcrypt hashes and a token-signing secret configured
+through environment variables. Business API routes require a bearer token;
+the login and username-list routes are the only public application endpoints.
+See `README.md` for setup and custom-auth limitations.
 
 ## How the parts fit together
 

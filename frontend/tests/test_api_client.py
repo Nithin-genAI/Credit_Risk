@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+import secrets
 
 import pandas as pd
 import pytest
@@ -12,10 +13,13 @@ from frontend.api_client import (
     applicant_record_from_mapping,
     chat_about_applicant,
     encode_batch_frame,
+    get_admin_users,
     get_drift_report,
     get_drift_status,
+    login_admin,
     predict_batch,
     sanitize_batch_csv,
+    set_api_access_token,
     validate_batch_upload,
 )
 
@@ -170,6 +174,38 @@ def test_json_request_rejects_non_object_payload(monkeypatch):
 
     with pytest.raises(APIError, match="JSON object"):
         _json_request("GET", "http://api.test/health")
+
+
+def test_json_requests_attach_bearer_token_only_to_authenticated_routes(monkeypatch):
+    username = "test-" + secrets.token_hex(4)
+    password = secrets.token_urlsafe(16)
+    protected_response = Mock(ok=True, status_code=200)
+    protected_response.json.return_value = {"status": "healthy"}
+    users_response = Mock(ok=True, status_code=200)
+    users_response.json.return_value = {"usernames": [username]}
+    login_response = Mock(ok=True, status_code=200)
+    login_response.json.return_value = {
+        "access_token": "new-token",
+        "token_type": "bearer",
+        "expires_in": 3_600,
+    }
+    request = Mock(
+        side_effect=[protected_response, users_response, login_response]
+    )
+    monkeypatch.setattr("frontend.api_client.requests.request", request)
+    set_api_access_token("session-token")
+    try:
+        _json_request("GET", "http://api.test/health")
+        assert get_admin_users("http://api.test") == [username]
+        login_admin("http://api.test", username, password)
+    finally:
+        set_api_access_token(None)
+
+    assert request.call_args_list[0].kwargs["headers"] == {
+        "Authorization": "Bearer session-token"
+    }
+    assert "headers" not in request.call_args_list[1].kwargs
+    assert "headers" not in request.call_args_list[2].kwargs
 
 
 def test_drift_client_calls_versioned_json_endpoints(monkeypatch):

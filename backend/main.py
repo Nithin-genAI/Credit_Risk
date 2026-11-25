@@ -6,16 +6,29 @@ import uuid
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.schemas import (
+    AdminLogin,
     ApplicantChatRequest,
     ApplicantInput,
     BatchValidationResponse,
     DriftAnalyzeRequest,
     DriftOutcomeSubmission,
     ModelVersion,
+)
+from backend.services.admin_auth import (
+    AuthConfigurationError,
+    InvalidAccessToken,
+    admin_usernames,
+    clear_login_failures,
+    create_access_token,
+    login_is_rate_limited,
+    record_login_failure,
+    verify_access_token,
+    verify_admin_credentials,
 )
 from backend.services.batch_inference import (
     BatchFileError,
@@ -34,6 +47,7 @@ from backend.services.llm_client import (
 from backend.services.prediction_service import prediction_service
 from backend.services.rbi_assistant import answer_question, source_catalog
 from backend.settings import (
+    ADMIN_TOKEN_TTL_SECONDS,
     CLASSIFICATION_THRESHOLD,
     V2_CLASSIFICATION_THRESHOLD,
     GEMINI_API_KEY,
@@ -47,6 +61,7 @@ from backend.schemas import ExplanationRequest, RegulatoryQuestion
 
 logger = logging.getLogger(__name__)
 MAX_APPLICANT_CHAT_HISTORY = 8
+admin_bearer = HTTPBearer(auto_error=False)
 
 app = FastAPI(
     title="Drifting Oracle",
@@ -62,8 +77,94 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+def require_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(admin_bearer),
+) -> str:
+    if credentials is None or credentials.scheme.casefold() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Admin authentication is required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return verify_access_token(credentials.credentials)
+    except InvalidAccessToken as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin session is invalid or expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthConfigurationError as exc:
+        logger.error("admin_auth_configuration_invalid error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured.",
+        ) from exc
+
+
+@app.get("/auth/users")
+def list_admin_users() -> dict[str, list[str]]:
+    try:
+        return {"usernames": admin_usernames()}
+    except AuthConfigurationError as exc:
+        logger.error("admin_auth_configuration_invalid error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured.",
+        ) from exc
+
+
+@app.post("/auth/login")
+def login_admin(
+    request: AdminLogin,
+    http_request: Request,
+) -> dict[str, Any]:
+    client_host = (
+        http_request.client.host if http_request.client is not None else "unknown"
+    )
+    rate_limit_key = f"{client_host}\0{request.username}"
+    if login_is_rate_limited(rate_limit_key):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts. Try again in 15 minutes.",
+            headers={"Retry-After": "900"},
+        )
+    try:
+        valid_credentials = verify_admin_credentials(
+            request.username,
+            request.password.get_secret_value(),
+        )
+    except AuthConfigurationError as exc:
+        logger.error("admin_auth_configuration_invalid error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured.",
+        ) from exc
+    if not valid_credentials:
+        record_login_failure(rate_limit_key)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    clear_login_failures(rate_limit_key)
+    try:
+        token = create_access_token(request.username)
+    except AuthConfigurationError as exc:
+        logger.error("admin_auth_configuration_invalid error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured.",
+        ) from exc
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": ADMIN_TOKEN_TTL_SECONDS,
+    }
 
 
 def _threshold_for_model(model_version: str) -> float:
@@ -465,7 +566,7 @@ async def _read_upload(file: UploadFile) -> bytes:
     return content
 
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(require_admin)])
 def root() -> dict[str, str]:
     return {
         "name": "Drifting Oracle",
@@ -474,7 +575,7 @@ def root() -> dict[str, str]:
     }
 
 
-@app.get("/health")
+@app.get("/health", dependencies=[Depends(require_admin)])
 def health_check() -> dict[str, Any]:
     raw_feature_count = len(model_feature_schema()[0])
     return {
@@ -497,7 +598,7 @@ def health_check() -> dict[str, Any]:
     }
 
 
-@app.get("/drift/status")
+@app.get("/drift/status", dependencies=[Depends(require_admin)])
 def drift_status(model_version: ModelVersion = "v1") -> dict[str, Any]:
     try:
         return drift_monitor.status(model_version)
@@ -508,7 +609,7 @@ def drift_status(model_version: ModelVersion = "v1") -> dict[str, Any]:
         ) from exc
 
 
-@app.get("/drift/report")
+@app.get("/drift/report", dependencies=[Depends(require_admin)])
 def drift_report(model_version: ModelVersion = "v1") -> dict[str, Any]:
     try:
         return drift_monitor.report(model_version)
@@ -519,7 +620,7 @@ def drift_report(model_version: ModelVersion = "v1") -> dict[str, Any]:
         ) from exc
 
 
-@app.post("/drift/analyze")
+@app.post("/drift/analyze", dependencies=[Depends(require_admin)])
 def analyze_drift(request: DriftAnalyzeRequest) -> dict[str, Any]:
     try:
         return drift_monitor.analyze(
@@ -535,7 +636,7 @@ def analyze_drift(request: DriftAnalyzeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.post("/drift/outcomes")
+@app.post("/drift/outcomes", dependencies=[Depends(require_admin)])
 def record_drift_outcomes(
     request: DriftOutcomeSubmission,
 ) -> dict[str, Any]:
@@ -560,7 +661,7 @@ def record_drift_outcomes(
     }
 
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(require_admin)])
 def predict(
     applicant: ApplicantInput,
     model_version: ModelVersion = "v1",
@@ -638,7 +739,7 @@ def predict(
     }
 
 
-@app.post("/applications/explain")
+@app.post("/applications/explain", dependencies=[Depends(require_admin)])
 def explain_applicant(request: ExplanationRequest) -> dict[str, Any]:
     return _explanation_payload(
         request.applicant,
@@ -649,12 +750,12 @@ def explain_applicant(request: ExplanationRequest) -> dict[str, Any]:
     )
 
 
-@app.post("/applications/chat")
+@app.post("/applications/chat", dependencies=[Depends(require_admin)])
 def applicant_chat(request: ApplicantChatRequest) -> dict[str, Any]:
     return _applicant_chat_payload(request)
 
 
-@app.post("/assistant/rbi")
+@app.post("/assistant/rbi", dependencies=[Depends(require_admin)])
 def rbi_assistant(question: RegulatoryQuestion) -> dict[str, Any]:
     if len(question.question) > MAX_RBI_QUERY_CHARS:
         raise HTTPException(
@@ -671,7 +772,7 @@ def rbi_assistant(question: RegulatoryQuestion) -> dict[str, Any]:
     return answer_question(question.question, question.audience)
 
 
-@app.get("/assistant/rbi/sources")
+@app.get("/assistant/rbi/sources", dependencies=[Depends(require_admin)])
 def rbi_sources() -> dict[str, Any]:
     return source_catalog()
 
@@ -679,6 +780,7 @@ def rbi_sources() -> dict[str, Any]:
 @app.post(
     "/applications/batch/validate",
     response_model=BatchValidationResponse,
+    dependencies=[Depends(require_admin)],
 )
 async def validate_batch(
     file: UploadFile = File(...),
@@ -692,7 +794,7 @@ async def validate_batch(
     return validation_payload(parsed)
 
 
-@app.post("/predict/batch")
+@app.post("/predict/batch", dependencies=[Depends(require_admin)])
 async def predict_batch(
     file: UploadFile = File(...),
     model_version: ModelVersion = "v1",
