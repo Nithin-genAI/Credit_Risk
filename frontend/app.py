@@ -17,11 +17,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from frontend.api_client import (
     APIError,
+    analyze_drift,
     applicant_record_from_mapping,
     applicant_chat_context_key,
     ask_regulatory_assistant,
     chat_about_applicant,
     explain_applicant,
+    get_drift_report,
+    get_drift_status,
     get_health,
     get_regulatory_sources,
     predict_batch,
@@ -109,6 +112,8 @@ def initialize_state() -> None:
     st.session_state.setdefault("current_explanation_model_version", "v1")
     st.session_state.setdefault("applicant_chat_histories", {})
     st.session_state.setdefault("rbi_response", None)
+    st.session_state.setdefault("drift_model_version", "v1")
+    st.session_state.setdefault("show_drift_report", False)
 
 
 def sidebar() -> str:
@@ -152,8 +157,9 @@ def api_health() -> tuple[dict[str, Any] | None, str | None]:
 def render_overview() -> None:
     st.subheader("Executive Overview")
     st.caption(
-        "Assessments and recent batch activity are stored only in this browser "
-        "session. No persistent application history is implemented."
+        "Dashboard counts are session-only. For drift monitoring, the backend "
+        "retains model features and probabilities locally for the configured "
+        "retention period without names or applicant IDs."
     )
     health, health_error = api_health()
     assessments = st.session_state["session_assessments"]
@@ -185,6 +191,35 @@ def render_overview() -> None:
             "RBI search key present (availability not checked): "
             f"{health.get('rbi_live_search_configured', False)}"
         )
+
+    st.markdown("#### Model drift monitoring")
+    drift_model = st.selectbox(
+        "Monitor model",
+        ["v1", "v2"],
+        format_func=lambda value: (
+            "V1 — Baseline" if value == "v1" else "V2 — 129-feature model"
+        ),
+        key="drift_model_version",
+    )
+    try:
+        drift_status = get_drift_status(API_URL, drift_model)
+    except APIError as exc:
+        st.error(f"Drift monitoring unavailable: {exc}")
+    else:
+        status_button = (
+            f"{drift_status['status']} · View {drift_model.upper()} report"
+        )
+        if st.button(status_button, key="open_drift_report"):
+            st.session_state["show_drift_report"] = True
+            st.rerun()
+        st.caption(
+            f"{drift_status['sample_count']} predictions in the last "
+            f"{drift_status['window_days']} days · "
+            f"{drift_status['compared_feature_count']} reference features compared."
+        )
+
+    if st.session_state["show_drift_report"]:
+        _render_drift_report_dialog()
 
     st.markdown("#### Saved baseline validation results · historical")
     metric_cols = st.columns(2)
@@ -227,6 +262,172 @@ def render_overview() -> None:
         st.rerun()
     if actions[1].button("Open RBI assistant", width="stretch"):
         st.session_state["pending_view"] = "RBI Regulatory Assistant"
+        st.rerun()
+
+
+@st.dialog("Detailed drift report", width="large")
+def _render_drift_report_dialog() -> None:
+    model_version = st.session_state["drift_model_version"]
+    st.caption(
+        f"Model: {model_version.upper()} · Monitoring uses only this model's "
+        "saved reference state."
+    )
+    report = None
+    if st.button("Analyze now", key="analyze_drift_now", type="primary"):
+        try:
+            with st.spinner("Comparing the monitoring window with reference state…"):
+                report = analyze_drift(API_URL, model_version)
+        except APIError as exc:
+            st.error(str(exc))
+    if report is None:
+        try:
+            report = get_drift_report(API_URL, model_version)
+        except APIError as exc:
+            st.error(str(exc))
+            report = None
+
+    if report is not None:
+        summary = st.columns(3)
+        summary[0].metric("Drift status", report["status"])
+        summary[1].metric("Window predictions", report["sample_count"])
+        summary[2].metric(
+            "Reference coverage",
+            f"{report['compared_feature_count']} / "
+            f"{report['reference_feature_count']}",
+        )
+        if report["reasons"]:
+            for reason in report["reasons"]:
+                st.info(reason)
+        st.caption(
+            f"Window: {report['window_start'] or 'no predictions'} → "
+            f"{report['window_end'] or 'no predictions'} · "
+            f"PSI thresholds: moderate ≥ "
+            f"{report['thresholds']['psi_moderate']:.2f}, drifted ≥ "
+            f"{report['thresholds']['psi_critical']:.2f}. "
+            "KS values are approximate because the saved reference is quantile-based."
+        )
+
+        performance = report["performance"]
+        st.markdown("#### Prediction and outcome monitoring")
+        performance_cols = st.columns(5)
+        performance_cols[0].metric(
+            "Probability PSI",
+            next(
+                (
+                    f"{metric['psi']:.4f}"
+                    for metric in report["feature_metrics"]
+                    if metric["feature"] == "prediction_probability"
+                    and metric["psi"] is not None
+                ),
+                "—",
+            ),
+        )
+        performance_cols[1].metric(
+            "Labeled outcomes",
+            performance["sample_count"],
+        )
+        performance_cols[2].metric(
+            "ROC-AUC",
+            f"{performance['roc_auc']:.4f}"
+            if performance["roc_auc"] is not None
+            else "—",
+        )
+        performance_cols[3].metric(
+            "Brier score",
+            f"{performance['brier_score']:.4f}"
+            if performance["brier_score"] is not None
+            else "—",
+        )
+        performance_cols[4].metric(
+            "Default rate",
+            f"{performance['actual_default_rate']:.2%}"
+            if performance["actual_default_rate"] is not None
+            else "—",
+        )
+        if performance["note"]:
+            st.caption(performance["note"])
+
+        metrics = report["feature_metrics"]
+        affected = [
+            item
+            for item in metrics
+            if item["status"] in {"Moderate Drift", "Oracle Drifted"}
+        ]
+        st.markdown("#### Affected features")
+        if affected:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Feature": item["feature"],
+                            "Type": item["feature_type"],
+                            "Status": item["status"],
+                            "PSI": item["psi"],
+                            "Reference missing": item["reference_missing_rate"],
+                            "Current missing": item["current_missing_rate"],
+                            "Missing change": item["missing_rate_change"],
+                            "KS p-value": item.get("ks_p_value"),
+                            "Chi-square p-value": item.get("chi_square_p_value"),
+                        }
+                        for item in affected
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        elif report["sample_count"] >= report["minimum_sample_size"]:
+            st.success("No features exceed the configured drift thresholds.")
+        else:
+            st.info(
+                "More predictions are required before the drift status can be "
+                "classified reliably."
+            )
+
+        available_features = [
+            item for item in metrics if item["reference_distribution"]
+        ]
+        if available_features:
+            selected_feature = st.selectbox(
+                "Compare reference and current distributions",
+                [item["feature"] for item in available_features],
+                key="drift_feature_detail",
+            )
+            selected_metric = next(
+                item
+                for item in available_features
+                if item["feature"] == selected_feature
+            )
+            buckets = sorted(
+                set(selected_metric["reference_distribution"])
+                | set(selected_metric["current_distribution"])
+            )
+            distribution = pd.DataFrame(
+                {
+                    "Reference": [
+                        selected_metric["reference_distribution"].get(bucket, 0.0)
+                        for bucket in buckets
+                    ],
+                    "Current": [
+                        selected_metric["current_distribution"].get(bucket, 0.0)
+                        for bucket in buckets
+                    ],
+                },
+                index=buckets,
+            )
+            st.caption(
+                f"PSI: {selected_metric['psi']:.4f} · "
+                f"Reference missing: "
+                f"{selected_metric['reference_missing_rate']:.2%} · "
+                f"Current missing: "
+                f"{selected_metric['current_missing_rate']:.2%}"
+                if selected_metric["psi"] is not None
+                and selected_metric["current_missing_rate"] is not None
+                else f"Feature status: {selected_metric['status']}"
+            )
+            st.bar_chart(distribution)
+
+    if st.button("× Close", key="close_drift_report"):
+        st.session_state["show_drift_report"] = False
         st.rerun()
 
 
@@ -335,6 +536,7 @@ def _render_batch_results() -> None:
         for column in (
             "row_number",
             "application_id",
+            "prediction_id",
             "model_version",
             "risk_probability",
             "predicted_class",

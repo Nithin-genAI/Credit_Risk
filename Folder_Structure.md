@@ -5,16 +5,18 @@ Credit_Risk/
 |-- .streamlit/
 |   `-- config.toml                         # Streamlit theme and app configuration
 |-- backend/
-|   |-- main.py                             # Health, validation, batch, explain, and RBI API routes
+|   |-- main.py                             # Prediction, drift, batch, explain, and RBI API routes
 |   |-- schemas.py                          # Request and response schema validation
-|   |-- settings.py                         # Threshold, upload, LLM, and query configuration
+|   |-- settings.py                         # Threshold, monitoring, upload, LLM, and query settings
 |   |-- services/
 |   |   |-- prediction_service.py           # Cached V1/V2 artifact pairs, inference, and SHAP
 |   |   |-- batch_inference.py              # Version-aware CSV/XLSX checks and aligned scoring
+|   |   |-- drift_monitor.py                # Local prediction logging and reference-based metrics
 |   |   |-- llm_client.py                   # Optional backend-only OpenAI-compatible LLM client
 |   |   `-- rbi_assistant.py                # RBI excerpt retrieval, citations, and abstention
 |   `-- tests/
 |       |-- test_api.py                     # API and batch behavior tests
+|       |-- test_drift_monitor.py            # Drift metrics, privacy filtering, and local storage
 |       `-- test_assistants.py              # RBI evidence and citation behavior tests
 |-- data/
 |   |-- application_train.csv               # Home Credit benchmark training dataset
@@ -22,13 +24,15 @@ Credit_Risk/
 |   |-- application_test1.csv               # First 100 source rows for batch inference
 |   |-- application_test2.csv               # Next 100 source rows for batch inference
 |   |-- demo_applicants.csv                 # Fixed-seed sample applicants for repeatable demos
+|   |-- drift_monitoring.sqlite3            # Generated local prediction log; ignored by Git
 |   `-- rbi_sources/
 |       |-- catalog.json                    # Allowlisted official RBI references and status notes
 |       `-- index.jsonl                     # Generated local excerpts; rebuild with the ingest script
 |-- frontend/
-|   |-- app.py                              # Streamlit views; adds project root for deployment imports
+|   |-- app.py                              # Streamlit views, drift status, and report dialog
 |   |-- api_client.py                       # Frontend calls and validation for the FastAPI service
 |   `-- tests/
+|       |-- test_app.py                     # Drift status/report dialog interaction
 |       `-- test_api_client.py              # API client and upload preparation tests
 |-- models/
 |   |-- baseline_xgboost.joblib             # Trained V1 XGBoost classifier
@@ -36,7 +40,7 @@ Credit_Risk/
 |   |-- baseline_feature_metadata.json      # Metadata describing model input features
 |   |-- baseline_reference_metrics.json     # Saved baseline evaluation metrics
 |   |-- baseline_shap_importance.csv        # Global SHAP feature importance values
-|   `-- reference_distribution.json         # Reference feature distributions for future monitoring
+|   `-- reference_distribution.json         # V1 numeric/categorical drift reference state
 |-- scripts/
 |   |-- create_demo_applicants.py           # Rebuilds demo_applicants.csv reproducibly
 |   |-- split_application_test.py           # Creates two consecutive 100-row test batches
@@ -85,7 +89,7 @@ Credit_Risk/
 |       |-- v2_model_metrics.json              # V2 held-out test ROC-AUC and average precision
 |       |-- v2_xgboost_model.joblib            # Saved V2 XGBoost model
 |       |-- v2_preprocessor.joblib             # Saved V2 preprocessing pipeline
-|       |-- v2_reference_state.json            # V2 reference distributions for future monitoring
+|       |-- v2_reference_state.json            # V2 reference distributions for drift monitoring
 |       `-- v2_oof_predictions.csv             # OOF probabilities, created by Notebook 05 threshold analysis
 |-- .gitattributes                          # Git file-handling rules
 |-- .gitignore                              # Files and generated artifacts excluded from Git
@@ -111,8 +115,11 @@ the `frontend` package can be imported when Streamlit Cloud runs
 the local default URL is not reachable from Streamlit Cloud.
 
 The demo records are sampled from the Home Credit benchmark dataset. They are
-not verified real-world bank applications. Drift monitoring and automatic
-retraining are not implemented.
+not verified real-world bank applications. Local drift monitoring compares
+model-feature inputs and probabilities to version-specific references; it does
+not automatically retrain models. The SQLite log contains sensitive feature
+values, excludes names/application IDs, is unencrypted, and must be stored on
+protected durable storage for deployments.
 
 To prepare two manageable inference batches from the unlabeled test dataset, run
 `python scripts/split_application_test.py`. It writes the first 100 source rows
@@ -160,8 +167,13 @@ The selected version is used consistently for batch validation, scoring,
 applicant explanations, and applicant chat. V1 artifacts are loaded from
 `models/`; the V2 model and matching preprocessor are loaded from
 `fine_tuning/artifacts/` and cached separately. Their thresholds are configured
-independently. The V2 reference state is prepared for future monitoring; drift
-detection is not implemented.
+independently. The V2 reference state is used for active monitoring; drift
+monitoring is available through FastAPI on port 8000, not as a Streamlit URL.
+`/docs` lists the HTTP methods and request shapes. The dashboard exposes
+separate V1/V2 statuses and a detailed report dialog. V1 reference distributions
+are generated from the same benchmark cohort used by
+`training_notebooks/06_reference_state.ipynb`; V2 uses
+`fine_tuning/artifacts/v2_reference_state.json`.
 
 Generated environments and caches (for example `.venv/`, `__pycache__/`, and
 `.git/`) are intentionally omitted from this guide.

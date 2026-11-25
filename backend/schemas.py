@@ -83,3 +83,17 @@ class BatchValidationResponse(BaseModel):
     row_issues_truncated: bool
     missing_value_counts: dict[str, int]
     warnings: list[str]
+
+
+class DriftAnalyzeRequest(BaseModel):
+    model_version: ModelVersion = "v1"
+    window_days: Optional[int] = Field(default=None, ge=1, le=365)
+
+
+class PredictionOutcome(BaseModel):
+    prediction_id: str = Field(..., min_length=36, max_length=36)
+    actual_outcome: Literal[0, 1]
+
+
+class DriftOutcomeSubmission(BaseModel):
+    outcomes: list[PredictionOutcome] = Field(..., min_length=1, max_length=1000)

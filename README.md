@@ -20,6 +20,8 @@ banking system.
 - `backend/services/batch_inference.py`: validates CSV/XLSX feature contracts,
   quarantines unsupported fields and `TARGET`, and preserves row-level result
   alignment.
+- `backend/services/drift_monitor.py`: best-effort local prediction logging and
+  V1/V2 reference-based drift reports.
 - `backend/services/rbi_assistant.py`: retrieves relevant excerpts from the
   locally generated, allowlisted RBI source index and abstains when evidence or
   source currency is insufficient.
@@ -37,6 +39,8 @@ banking system.
   baseline training, and reference artifact notebooks.
 - `models/`: serialized V1 model and preprocessor plus metrics, feature metadata,
   global SHAP importance, and reference input distributions.
+- `data/drift_monitoring.sqlite3`: generated local prediction log; ignored by
+  Git and populated as predictions are made.
 
 ## Setup and launch
 
@@ -75,7 +79,11 @@ The UI defaults to `http://127.0.0.1:8000`. Override it with
 $env:DRIFTING_ORACLE_API_URL = "http://127.0.0.1:8000"
 ```
 
-The API's interactive docs are at `http://127.0.0.1:8000/docs`.
+The API's interactive docs are at `http://127.0.0.1:8000/docs`. FastAPI is an
+API on port 8000; the Streamlit browser application is on port 8501. Typing an
+API path on port 8501 still reaches the Streamlit app. FastAPI has no
+catch-all page route: `/` returns JSON, `/health` is GET, and `/predict` is
+POST-only (a browser GET returns HTTP 405).
 
 ## Prepare small inference batches
 
@@ -140,6 +148,25 @@ version loads its own saved model and matching preprocessor, with artifacts
 cached by the backend. Upload size, batch row count, and RBI question length
 are configurable with the other `DRIFTING_ORACLE_*` settings.
 
+Drift monitoring uses local SQLite (standard library; no database package is
+required). Its path, 30-day default window, 100-prediction minimum, 10,000-row
+analysis cap, and 180-day log retention are configurable with
+`DRIFTING_ORACLE_MONITORING_DB_PATH`, `DRIFTING_ORACLE_WINDOW_DAYS`,
+`DRIFTING_ORACLE_MIN_SAMPLE_SIZE`,
+`DRIFTING_ORACLE_MAX_MONITORING_ROWS`, and
+`DRIFTING_ORACLE_RETENTION_DAYS`. PSI status thresholds default to 0.10
+(moderate) and 0.20 (drifted). Absolute missing-rate changes of 5 and 10
+percentage points use the same moderate/critical status levels. All thresholds are
+configurable in `.env`; see `.env.example`.
+
+The backend stores the model's prepared feature inputs and probability with a
+random prediction ID, timestamp, model version, and optional batch ID. Names,
+application IDs, source filenames, and `TARGET` are not stored. These feature
+values can still be sensitive: the default SQLite file is unencrypted and
+should be used only in a protected environment. The local database is ignored
+by Git. Deployments need a protected durable volume or configured database path
+if monitoring history must survive restarts.
+
 Build or refresh the local RBI excerpt index from the allowlisted official RBI
 pages:
 
@@ -160,6 +187,14 @@ assistant abstains or returns only a clearly caveated local-source response.
 ## API contracts
 
 - `GET /` and `GET /health`: basic API and model/preprocessor readiness.
+- `GET /drift/status?model_version=v1|v2`: overall status for one model.
+- `GET /drift/report?model_version=v1|v2`: feature distributions and detailed
+  metrics for that model.
+- `POST /drift/analyze`: run an on-demand analysis; the JSON body accepts
+  `model_version` and optional `window_days`.
+- `POST /drift/outcomes`: attach actual outcomes to random prediction IDs when
+  labels become available, enabling ROC-AUC, Brier score, precision, and recall.
+- `POST /predict`: score one applicant and return its random `prediction_id`.
 - `POST /applications/batch/validate`: inspect a CSV/XLSX schema and row values
   without scoring.
 - `POST /predict/batch`: score valid rows, return explicit row errors, stable
@@ -192,6 +227,25 @@ feature coverage is disclosed and is not equivalent to complete-feature
 inference. Each version uses its matching saved model/preprocessor pair; the
 API does not retrain them.
 
+Both individual and batch inferences are logged on a best-effort basis: storage
+failures are logged but do not fail valid predictions. Applicant explanations
+and chat also log the model predictions they compute. The V1 reference is
+`models/reference_distribution.json` (130 features); the V2 reference is
+`fine_tuning/artifacts/v2_reference_state.json` (129 features). Numeric
+features use PSI and a KS diagnostic approximated from saved quantiles;
+categorical features use PSI and a chi-square goodness-of-fit diagnostic.
+Probability drift compares V1 predictions with saved validation quantiles and
+V2 predictions with the saved out-of-fold probability distribution. These
+reference sources and quantile-derived KS p-values are approximate, not live
+production baselines. Fewer than the configured minimum predictions returns
+`Insufficient Data`, not a no-drift claim. Drift reports are descriptive, not
+lending-policy decisions or automatic retraining triggers. Performance
+metrics remain unavailable until actual outcomes are submitted.
+
+`GET /drift/status` and `GET /drift/report` are API URLs on port 8000, not
+Streamlit page routes. Use `/docs` to inspect and call the HTTP methods and
+request shapes.
+
 ## UI/API smoke checks
 
 Run the API, frontend-client, and diagnostic tests:
@@ -203,7 +257,8 @@ python -m pytest backend/tests frontend/tests
 With the API and Streamlit app running, check:
 
 1. **Executive Overview:** verify API/model readiness, historical validation
-   metrics, and session-only counts/activity.
+   metrics, and separate V1/V2 drift status. Click the status to open its
+   detailed report and close it with the `× Close` control.
 2. **Application Review:** select V1 or V2, validate an uploaded CSV or XLSX
    before scoring, and confirm the selected model's threshold. Check
    missing/unsupported columns, `TARGET` exclusion, row errors, result
@@ -247,8 +302,10 @@ With the API and Streamlit app running, check:
 - The overview displays ROC-AUC `0.8778` and precision `76.23%` as presentation
   baseline values. They do not match the saved evaluation report and are not
   measured results from the saved model.
-- Drift monitoring and automatic retraining are **not implemented**. There is
-  no live customer feed; demo records are sampled from a public benchmark.
+- Drift monitoring runs locally from recorded predictions and saved reference
+  states. There is no live customer feed or automatic retraining; demo records
+  are sampled from a public benchmark. Actual performance metrics require
+  ground-truth outcomes to be posted through `/drift/outcomes`.
 
 These checks do not establish production readiness, fairness, calibration,
 regulatory suitability, or decision-policy approval.

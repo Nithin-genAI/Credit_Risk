@@ -1,3 +1,6 @@
+import json
+import sqlite3
+from contextlib import closing
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -8,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.batch_inference import model_feature_schema
+from backend.services.drift_monitor import DriftMonitor
 from backend.services.prediction_service import prediction_service
 
 
@@ -15,11 +19,19 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def disable_external_providers_for_api_tests(monkeypatch):
+def disable_external_providers_for_api_tests(
+    monkeypatch,
+    tmp_path,
+):
+    monitor = DriftMonitor(tmp_path / "monitor.sqlite3")
+    monkeypatch.setattr("backend.services.drift_monitor.drift_monitor", monitor)
+    monkeypatch.setattr("backend.services.batch_inference.drift_monitor", monitor)
+    monkeypatch.setattr("backend.main.drift_monitor", monitor)
     monkeypatch.setattr("backend.main.GROQ_API_KEY", "")
     monkeypatch.setattr("backend.main.GROQ_API_KEY_2", "")
     monkeypatch.setattr("backend.main.GEMINI_API_KEY", "")
     monkeypatch.setattr("backend.services.rbi_assistant.GEMINI_API_KEY", "")
+    return monitor
 
 
 def test_health():
@@ -36,6 +48,36 @@ def test_root():
 
     assert response.status_code == 200
     assert response.json()["name"] == "Drifting Oracle"
+
+
+def test_drift_endpoints_and_api_browser_methods(
+    disable_external_providers_for_api_tests,
+):
+    root = client.get("/")
+    docs = client.get("/docs")
+    openapi = client.get("/openapi.json")
+    status = client.get("/drift/status?model_version=v1")
+    report = client.get("/drift/report?model_version=v2")
+    analysis = client.post(
+        "/drift/analyze",
+        json={"model_version": "v2", "window_days": 14},
+    )
+
+    assert root.status_code == 200
+    assert root.json()["name"] == "Drifting Oracle"
+    assert docs.status_code == 200
+    assert openapi.status_code == 200
+    assert "/drift/status" in openapi.json()["paths"]
+    assert client.get("/predict").status_code == 405
+    assert status.status_code == 200
+    assert status.json()["status"] == "Insufficient Data"
+    assert status.json()["model_version"] == "v1"
+    assert report.status_code == 200
+    assert report.json()["model_version"] == "v2"
+    assert len(report.json()["feature_metrics"]) == 130
+    assert analysis.status_code == 200
+    assert analysis.json()["window_days"] == 14
+    assert client.get("/drift/status?model_version=v3").status_code == 422
 
 
 def test_predict_includes_shap_factors():
@@ -60,6 +102,7 @@ def test_predict_includes_shap_factors():
         for factor in result["top_factors"]
     )
     assert result["classification_threshold"] == 0.15
+    assert len(result["prediction_id"]) == 36
     assert result["predicted_class"] in {0, 1}
     assert result["provisional_classification"] in {
         "lower_default_risk",
@@ -92,7 +135,10 @@ def test_v2_predict_uses_matching_artifacts_threshold_and_shap():
     assert len(model_feature_schema("v2")[0]) == 120
 
 
-def test_v2_batch_validation_and_scoring_use_selected_model_and_threshold():
+def test_v2_batch_validation_and_scoring_use_selected_model_and_threshold(
+    disable_external_providers_for_api_tests,
+):
+    monitor = disable_external_providers_for_api_tests
     content = (
         "application_id,AMT_INCOME_TOTAL,AMT_CREDIT,DAYS_BIRTH\n"
         "V2-ROW-A,100000,200000,-12000\n"
@@ -121,6 +167,15 @@ def test_v2_batch_validation_and_scoring_use_selected_model_and_threshold():
         "V2-ROW-B",
     ]
     assert all(row["model_version"] == "v2" for row in result["results"])
+    assert len(
+        {row["prediction_id"] for row in result["results"]}
+    ) == 2
+    with closing(sqlite3.connect(monitor.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT model_version, batch_id, COUNT(*) "
+            "FROM predictions GROUP BY model_version, batch_id"
+        ).fetchall()
+    assert rows == [("v2", result["batch_id"], 2)]
 
 
 def test_v2_applicant_explanation_and_chat_keep_model_context():
@@ -186,6 +241,77 @@ def test_predict_rejects_incompatible_full_schema_values():
     )
     assert response.status_code == 422
     assert "NAME_FAMILY_STATUS" in response.json()["detail"]["invalid_columns"]
+
+
+def test_predictions_log_sanitized_features_and_accept_later_outcomes(
+    disable_external_providers_for_api_tests,
+):
+    monitor = disable_external_providers_for_api_tests
+    response = client.post(
+        "/predict",
+        json={
+            "application_id": "SENSITIVE-APP-ID",
+            "name": "Sensitive Applicant",
+            "AMT_INCOME_TOTAL": 180000,
+            "AMT_CREDIT": 500000,
+            "DAYS_BIRTH": -12000,
+        },
+    )
+    assert response.status_code == 200
+    prediction_id = response.json()["prediction_id"]
+    with closing(sqlite3.connect(monitor.database_path)) as connection:
+        row = connection.execute(
+            "SELECT predicted_at, model_version, probability, feature_values "
+            "FROM predictions WHERE prediction_id = ?",
+            (prediction_id,),
+        ).fetchone()
+    assert row is not None
+    assert row[0]
+    assert row[1] == "v1"
+    assert 0 <= row[2] <= 1
+    features = json.loads(row[3])
+    assert features["AMT_CREDIT"] == 500000
+    assert not {"application_id", "name", "SK_ID_CURR", "TARGET"} & set(features)
+    assert "Sensitive Applicant" not in row[3]
+    assert "SENSITIVE-APP-ID" not in row[3]
+
+    outcome = client.post(
+        "/drift/outcomes",
+        json={
+            "outcomes": [
+                {"prediction_id": prediction_id, "actual_outcome": 1}
+            ]
+        },
+    )
+    assert outcome.status_code == 200
+    assert outcome.json()["updated_count"] == 1
+    assert client.get("/drift/report?model_version=v1").json()[
+        "performance"
+    ]["sample_count"] == 1
+
+
+def test_prediction_logging_failure_does_not_fail_prediction(
+    disable_external_providers_for_api_tests,
+    tmp_path,
+):
+    monitor = disable_external_providers_for_api_tests
+    blocked_path = tmp_path / "not_a_database"
+    blocked_path.mkdir()
+    monitor.database_path = blocked_path
+
+    response = client.post(
+        "/predict",
+        json={
+            "application_id": "APP-LOG-FAIL",
+            "name": "Applicant",
+            "AMT_INCOME_TOTAL": 180000,
+            "AMT_CREDIT": 500000,
+            "DAYS_BIRTH": -12000,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "risk_probability" in response.json()
 
 
 def test_explanation_recomputes_model_evidence_and_returns_narrative(monkeypatch):

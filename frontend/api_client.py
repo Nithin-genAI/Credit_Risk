@@ -82,6 +82,60 @@ def get_health(base_url: str) -> dict[str, Any]:
     return _json_request("GET", f"{base_url.rstrip('/')}/health")
 
 
+def get_drift_status(
+    base_url: str,
+    model_version: str = "v1",
+) -> dict[str, Any]:
+    result = _json_request(
+        "GET",
+        f"{base_url.rstrip('/')}/drift/status",
+        params={"model_version": model_version},
+    )
+    if not isinstance(result.get("status"), str):
+        raise APIError("The drift status response is invalid.")
+    return result
+
+
+def get_drift_report(
+    base_url: str,
+    model_version: str = "v1",
+) -> dict[str, Any]:
+    result = _json_request(
+        "GET",
+        f"{base_url.rstrip('/')}/drift/report",
+        params={"model_version": model_version},
+        timeout=BATCH_TIMEOUT_SECONDS,
+    )
+    if (
+        not isinstance(result.get("feature_metrics"), list)
+        or not isinstance(result.get("performance"), dict)
+    ):
+        raise APIError("The detailed drift report is invalid.")
+    return result
+
+
+def analyze_drift(
+    base_url: str,
+    model_version: str = "v1",
+    window_days: int | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"model_version": model_version}
+    if window_days is not None:
+        body["window_days"] = window_days
+    result = _json_request(
+        "POST",
+        f"{base_url.rstrip('/')}/drift/analyze",
+        json=body,
+        timeout=BATCH_TIMEOUT_SECONDS,
+    )
+    if (
+        not isinstance(result.get("status"), str)
+        or not isinstance(result.get("feature_metrics"), list)
+    ):
+        raise APIError("The drift analysis response is invalid.")
+    return result
+
+
 def validate_batch_upload(
     base_url: str,
     content: bytes,

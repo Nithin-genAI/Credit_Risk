@@ -239,11 +239,24 @@ class PredictionService:
         self,
         applicant: dict[str, Any],
         model_version: str = "v1",
+        prediction_id: str | None = None,
     ) -> tuple[float, Any]:
         bundle = self.get_model(model_version)
         df = self.prepare_input(applicant, model_version)
         X_processed = bundle.preprocessor.transform(df)
         probability = float(bundle.model.predict_proba(X_processed)[0][1])
+        from backend.services.drift_monitor import drift_monitor
+
+        drift_monitor.record_predictions(
+            [
+                {
+                    "prediction_id": prediction_id,
+                    "model_version": bundle.version,
+                    "probability": probability,
+                    "feature_values": df.iloc[0].to_dict(),
+                }
+            ]
+        )
         return probability, X_processed
 
     def explain(

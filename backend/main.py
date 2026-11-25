@@ -13,6 +13,8 @@ from backend.schemas import (
     ApplicantChatRequest,
     ApplicantInput,
     BatchValidationResponse,
+    DriftAnalyzeRequest,
+    DriftOutcomeSubmission,
     ModelVersion,
 )
 from backend.services.batch_inference import (
@@ -24,6 +26,7 @@ from backend.services.batch_inference import (
     validation_payload,
 )
 from backend.services.feature_descriptions import describe_model_feature
+from backend.services.drift_monitor import DriftStorageError, drift_monitor
 from backend.services.llm_client import (
     explain_model_evidence,
     generate_applicant_chat_answer,
@@ -494,6 +497,69 @@ def health_check() -> dict[str, Any]:
     }
 
 
+@app.get("/drift/status")
+def drift_status(model_version: ModelVersion = "v1") -> dict[str, Any]:
+    try:
+        return drift_monitor.status(model_version)
+    except DriftStorageError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Drift monitoring storage is unavailable.",
+        ) from exc
+
+
+@app.get("/drift/report")
+def drift_report(model_version: ModelVersion = "v1") -> dict[str, Any]:
+    try:
+        return drift_monitor.report(model_version)
+    except DriftStorageError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Drift monitoring storage is unavailable.",
+        ) from exc
+
+
+@app.post("/drift/analyze")
+def analyze_drift(request: DriftAnalyzeRequest) -> dict[str, Any]:
+    try:
+        return drift_monitor.analyze(
+            request.model_version,
+            request.window_days,
+        )
+    except DriftStorageError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Drift monitoring storage is unavailable.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/drift/outcomes")
+def record_drift_outcomes(
+    request: DriftOutcomeSubmission,
+) -> dict[str, Any]:
+    try:
+        result = drift_monitor.record_outcomes(
+            [
+                (item.prediction_id, item.actual_outcome)
+                for item in request.outcomes
+            ]
+        )
+    except DriftStorageError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Drift monitoring storage is unavailable.",
+        ) from exc
+    return {
+        **result,
+        "message": (
+            "Known prediction outcomes were recorded. Unknown prediction IDs "
+            "were not changed."
+        ),
+    }
+
+
 @app.post("/predict")
 def predict(
     applicant: ApplicantInput,
@@ -526,7 +592,12 @@ def predict(
             in set(model_feature_schema(model_version)[0])
             | {"application_id", "name"}
         }
-        probability, _ = prediction_service.predict(safe_applicant, model_version)
+        prediction_id = str(uuid.uuid4())
+        probability, _ = prediction_service.predict(
+            safe_applicant,
+            model_version,
+            prediction_id=prediction_id,
+        )
         factors = prediction_service.explain(
             safe_applicant,
             top_n=5,
@@ -549,6 +620,7 @@ def predict(
         for column in model_features
     )
     return {
+        "prediction_id": prediction_id,
         "application_id": applicant.application_id,
         "name": applicant.name,
         "risk_probability": round(probability, 6),
@@ -640,9 +712,10 @@ async def predict_batch(
             },
         )
 
+    batch_id = str(uuid.uuid4())
     response = score_batch(
         parsed,
         _threshold_for_model(parsed.model_version),
+        batch_id=batch_id,
     )
-    response["batch_id"] = str(uuid.uuid4())
     return response

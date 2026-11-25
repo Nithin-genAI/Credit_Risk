@@ -7,10 +7,13 @@ import requests
 from frontend.api_client import (
     APIError,
     _json_request,
+    analyze_drift,
     applicant_chat_context_key,
     applicant_record_from_mapping,
     chat_about_applicant,
     encode_batch_frame,
+    get_drift_report,
+    get_drift_status,
     predict_batch,
     sanitize_batch_csv,
     validate_batch_upload,
@@ -167,6 +170,40 @@ def test_json_request_rejects_non_object_payload(monkeypatch):
 
     with pytest.raises(APIError, match="JSON object"):
         _json_request("GET", "http://api.test/health")
+
+
+def test_drift_client_calls_versioned_json_endpoints(monkeypatch):
+    status_response = Mock(ok=True, status_code=200)
+    status_response.json.return_value = {"status": "No Significant Drift"}
+    report_response = Mock(ok=True, status_code=200)
+    report_response.json.return_value = {
+        "feature_metrics": [],
+        "performance": {},
+    }
+    analyze_response = Mock(ok=True, status_code=200)
+    analyze_response.json.return_value = {
+        "status": "Insufficient Data",
+        "feature_metrics": [],
+    }
+    request = Mock(
+        side_effect=[status_response, report_response, analyze_response]
+    )
+    monkeypatch.setattr("frontend.api_client.requests.request", request)
+
+    assert get_drift_status("http://api.test", "v2")["status"] == (
+        "No Significant Drift"
+    )
+    get_drift_report("http://api.test", "v2")
+    assert analyze_drift("http://api.test", "v1", 7)["status"] == (
+        "Insufficient Data"
+    )
+
+    assert request.call_args_list[0].kwargs["params"] == {"model_version": "v2"}
+    assert request.call_args_list[1].kwargs["params"] == {"model_version": "v2"}
+    assert request.call_args_list[2].kwargs["json"] == {
+        "model_version": "v1",
+        "window_days": 7,
+    }
 
 
 def test_applicant_chat_context_keys_are_record_specific():

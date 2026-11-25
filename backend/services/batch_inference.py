@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ from backend.services.prediction_service import (
     ENGINEERED_FEATURES,
     prediction_service,
 )
+from backend.services.drift_monitor import drift_monitor
 
 
 REQUIRED_FEATURES = {
@@ -333,7 +335,11 @@ def validation_payload(parsed: ParsedBatch) -> dict[str, Any]:
     }
 
 
-def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
+def score_batch(
+    parsed: ParsedBatch,
+    threshold: float,
+    batch_id: str | None = None,
+) -> dict[str, Any]:
     if not parsed.valid_schema:
         raise BatchFileError(
             "Required batch schema is invalid: "
@@ -375,11 +381,10 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
             results[position] = result
             continue
 
-        applicant = {
-            column: (None if pd.isna(value) else value)
-            for column, value in row.items()
-            if column in model_columns
-        }
+        applicant: dict[str, Any] = {}
+        for column, value in row.items():
+            if column in model_columns:
+                applicant[str(column)] = None if pd.isna(value) else value
         provided_count = sum(
             column in applicant and applicant[column] is not None
             for column in model_columns
@@ -400,13 +405,18 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
         if len(probabilities) != len(valid_positions):
             raise RuntimeError("Batch prediction count did not match valid input rows.")
 
-        for position, probability in zip(valid_positions, probabilities):
+        prediction_logs = []
+        for batch_position, (position, probability) in enumerate(
+            zip(valid_positions, probabilities)
+        ):
             result_entry = results[position]
             if result_entry is None:
                 raise RuntimeError("A valid batch row has no aligned result record.")
+            prediction_id = str(uuid.uuid4())
             predicted_class = int(probability >= threshold)
             result_entry.update(
                 {
+                    "prediction_id": prediction_id,
                     "risk_probability": round(float(probability), 6),
                     "predicted_class": predicted_class,
                     "provisional_classification": (
@@ -417,6 +427,16 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
                     "status": "scored",
                 }
             )
+            prediction_logs.append(
+                {
+                    "prediction_id": prediction_id,
+                    "batch_id": batch_id,
+                    "model_version": model_version,
+                    "probability": float(probability),
+                    "feature_values": feature_frame.iloc[batch_position].to_dict(),
+                }
+            )
+        drift_monitor.record_predictions(prediction_logs)
 
     aligned_results = [
         result
@@ -427,7 +447,7 @@ def score_batch(parsed: ParsedBatch, threshold: float) -> dict[str, Any]:
         raise RuntimeError("Batch result count did not match uploaded rows.")
     successful = sum(result["status"] == "scored" for result in aligned_results)
     return {
-        "batch_id": None,
+        "batch_id": batch_id,
         "total_applications": len(aligned_results),
         "successful_predictions": successful,
         "failed_predictions": len(aligned_results) - successful,
