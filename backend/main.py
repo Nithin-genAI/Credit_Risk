@@ -22,9 +22,11 @@ from backend.schemas import (
 from backend.services.admin_auth import (
     AuthConfigurationError,
     InvalidAccessToken,
+    LocalPlaintextAuthDenied,
     admin_usernames,
     clear_login_failures,
     create_access_token,
+    ensure_auth_request_allowed,
     login_is_rate_limited,
     record_login_failure,
     verify_access_token,
@@ -81,9 +83,31 @@ app.add_middleware(
 )
 
 
+def _ensure_auth_client_allowed(http_request: Request) -> str | None:
+    client_host = (
+        http_request.client.host if http_request.client is not None else None
+    )
+    try:
+        ensure_auth_request_allowed(client_host)
+    except LocalPlaintextAuthDenied as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="Local prototype authentication is only available from this machine.",
+        ) from exc
+    except AuthConfigurationError as exc:
+        logger.error("admin_auth_configuration_invalid error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured.",
+        ) from exc
+    return client_host
+
+
 def require_admin(
+    http_request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(admin_bearer),
 ) -> str:
+    _ensure_auth_client_allowed(http_request)
     if credentials is None or credentials.scheme.casefold() != "bearer":
         raise HTTPException(
             status_code=401,
@@ -107,7 +131,8 @@ def require_admin(
 
 
 @app.get("/auth/users")
-def list_admin_users() -> dict[str, list[str]]:
+def list_admin_users(http_request: Request) -> dict[str, list[str]]:
+    _ensure_auth_client_allowed(http_request)
     try:
         return {"usernames": admin_usernames()}
     except AuthConfigurationError as exc:
@@ -123,9 +148,7 @@ def login_admin(
     request: AdminLogin,
     http_request: Request,
 ) -> dict[str, Any]:
-    client_host = (
-        http_request.client.host if http_request.client is not None else "unknown"
-    )
+    client_host = _ensure_auth_client_allowed(http_request) or "unknown"
     rate_limit_key = f"{client_host}\0{request.username}"
     if login_is_rate_limited(rate_limit_key):
         raise HTTPException(

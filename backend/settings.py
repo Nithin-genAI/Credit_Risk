@@ -41,6 +41,19 @@ ADMIN_CREDENTIALS_JSON = os.getenv(
     "DRIFTING_ORACLE_ADMIN_CREDENTIALS_JSON",
     "",
 ).strip()
+ADMIN_AUTH_MODE = os.getenv(
+    "DRIFTING_ORACLE_ADMIN_AUTH_MODE",
+    "bcrypt",
+).strip().casefold()
+APP_ENVIRONMENT = os.getenv(
+    "DRIFTING_ORACLE_ENVIRONMENT",
+    "production",
+).strip().casefold()
+ADMIN_USERNAME = os.getenv(
+    "DRIFTING_ORACLE_ADMIN_USERNAME",
+    "",
+).strip()
+ADMIN_PASSWORD = os.getenv("DRIFTING_ORACLE_ADMIN_PASSWORD", "")
 ADMIN_TOKEN_SECRET = os.getenv(
     "DRIFTING_ORACLE_ADMIN_TOKEN_SECRET",
     "",

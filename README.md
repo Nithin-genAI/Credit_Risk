@@ -135,12 +135,9 @@ when it cannot obtain verified official citations.
 
 ### Admin authentication
 
-The Streamlit dashboard is hidden until an admin signs in. Configure admin
-authentication in the repository-root `.env` before launch. The backend reads
-`DRIFTING_ORACLE_ADMIN_CREDENTIALS_JSON`, a JSON object mapping usernames to
-bcrypt hashes, and `DRIFTING_ORACLE_ADMIN_TOKEN_SECRET`, a random signing
-secret of at least 32 bytes. Generate a password hash without echoing the
-password:
+The Streamlit dashboard is hidden until an admin signs in. Production uses
+bcrypt credentials configured in the repository-root `.env`. Generate a
+password hash without echoing the password:
 
 ```bash
 python -c "import bcrypt, getpass; print(bcrypt.hashpw(getpass.getpass('New admin password: ').encode(), bcrypt.gensalt(rounds=12)).decode())"
@@ -155,14 +152,27 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 Set the generated values in `.env`, for example:
 
 ```dotenv
+DRIFTING_ORACLE_ENVIRONMENT=production
+DRIFTING_ORACLE_ADMIN_AUTH_MODE=bcrypt
 DRIFTING_ORACLE_ADMIN_CREDENTIALS_JSON='{"analyst":"<paste-bcrypt-hash-here>"}'
 DRIFTING_ORACLE_ADMIN_TOKEN_SECRET=<paste-generated-secret-here>
 DRIFTING_ORACLE_ADMIN_TOKEN_TTL_SECONDS=28800
 ```
 
-Never put plaintext passwords or real credential hashes in `.env.example` or
-Git. `/auth/users` provides the username choices and `/auth/login` exchanges a
-valid username/password for a short-lived bearer token. All business API
+For a local academic prototype only, `.env` may instead use:
+
+```dotenv
+DRIFTING_ORACLE_ENVIRONMENT=development
+DRIFTING_ORACLE_ADMIN_AUTH_MODE=local_plaintext
+DRIFTING_ORACLE_ADMIN_USERNAME=admin_1
+DRIFTING_ORACLE_ADMIN_PASSWORD=<local-only-password>
+DRIFTING_ORACLE_ADMIN_TOKEN_SECRET=<paste-generated-secret-here>
+```
+
+Local plaintext mode is rejected outside the development environment and from
+non-loopback clients. Keep `.env` ignored by Git and never use this mode for a
+deployed app. `/auth/users` provides the username choices and `/auth/login`
+exchanges valid credentials for a short-lived bearer token. All business API
 routes require that token; `/docs` and `/openapi.json` remain public, but
 requests made from the docs still need authorization. Use the Swagger
 Authorize control with a token returned by `/auth/login`.

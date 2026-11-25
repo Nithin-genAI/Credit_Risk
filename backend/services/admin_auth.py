@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
+import hmac
+import ipaddress
 import re
 import threading
 import time
 from collections.abc import Mapping
 
-import bcrypt
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from backend.settings import (
+    ADMIN_AUTH_MODE,
     ADMIN_CREDENTIALS_JSON,
+    ADMIN_PASSWORD,
+    ADMIN_USERNAME,
+    APP_ENVIRONMENT,
     ADMIN_TOKEN_SECRET,
     ADMIN_TOKEN_TTL_SECONDS,
 )
@@ -31,6 +36,46 @@ class AuthConfigurationError(RuntimeError):
 
 class InvalidAccessToken(ValueError):
     """The supplied bearer token is invalid or expired."""
+
+
+class LocalPlaintextAuthDenied(PermissionError):
+    """Local plaintext authentication was requested from a non-local client."""
+
+
+def uses_local_plaintext_auth() -> bool:
+    if ADMIN_AUTH_MODE not in {"bcrypt", "local_plaintext"}:
+        raise AuthConfigurationError("The admin authentication mode is invalid.")
+    return ADMIN_AUTH_MODE == "local_plaintext"
+
+
+def _local_plaintext_credentials() -> tuple[str, str]:
+    if APP_ENVIRONMENT != "development":
+        raise AuthConfigurationError(
+            "Plaintext admin authentication is only available in development."
+        )
+    if (
+        not ADMIN_USERNAME
+        or len(ADMIN_USERNAME) > 128
+        or not ADMIN_PASSWORD
+    ):
+        raise AuthConfigurationError(
+            "Local admin username and password are not configured."
+        )
+    return ADMIN_USERNAME, ADMIN_PASSWORD
+
+
+def ensure_auth_request_allowed(client_host: str | None) -> None:
+    if not uses_local_plaintext_auth():
+        return
+    _local_plaintext_credentials()
+    try:
+        is_loopback = ipaddress.ip_address(client_host or "").is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise LocalPlaintextAuthDenied(
+            "Local plaintext authentication is only available from this machine."
+        )
 
 
 def _configured_credentials() -> dict[str, bytes]:
@@ -65,10 +110,30 @@ def _configured_credentials() -> dict[str, bytes]:
 
 
 def admin_usernames() -> list[str]:
+    if uses_local_plaintext_auth():
+        username, _ = _local_plaintext_credentials()
+        return [username]
     return sorted(_configured_credentials())
 
 
 def verify_admin_credentials(username: str, password: str) -> bool:
+    if uses_local_plaintext_auth():
+        expected_username, expected_password = _local_plaintext_credentials()
+        try:
+            username_bytes = username.encode("utf-8")
+            password_bytes = password.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        username_matches = hmac.compare_digest(
+            username_bytes,
+            expected_username.encode("utf-8"),
+        )
+        password_matches = hmac.compare_digest(
+            password_bytes,
+            expected_password.encode("utf-8"),
+        )
+        return username_matches and password_matches
+
     credentials = _configured_credentials()
     encoded_hash = credentials.get(username)
     try:
@@ -77,6 +142,8 @@ def verify_admin_credentials(username: str, password: str) -> bool:
         return False
     if encoded_hash is None or len(password_bytes) > 72:
         return False
+    import bcrypt
+
     return bcrypt.checkpw(password_bytes, encoded_hash)
 
 
@@ -104,7 +171,7 @@ def verify_access_token(token: str) -> str:
     except BadSignature as exc:
         raise InvalidAccessToken("Invalid or expired admin session.") from exc
     username = payload.get("sub") if isinstance(payload, dict) else None
-    if not isinstance(username, str) or username not in _configured_credentials():
+    if not isinstance(username, str) or username not in admin_usernames():
         raise InvalidAccessToken("Invalid or expired admin session.")
     return username
 

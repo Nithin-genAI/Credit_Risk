@@ -38,6 +38,7 @@ def disable_external_providers_for_api_tests(
         "ADMIN_CREDENTIALS_JSON",
         json.dumps({_TEST_USERNAME: _TEST_PASSWORD_HASH}),
     )
+    monkeypatch.setattr(admin_auth, "ADMIN_AUTH_MODE", "bcrypt")
     monkeypatch.setattr(
         admin_auth,
         "ADMIN_TOKEN_SECRET",
@@ -106,6 +107,38 @@ def test_admin_login_rate_limits_repeated_failures():
     )
     assert limited.status_code == 429
     assert limited.headers["Retry-After"] == "900"
+
+
+def test_local_plaintext_auth_is_loopback_and_development_only(monkeypatch):
+    monkeypatch.setattr(admin_auth, "ADMIN_AUTH_MODE", "local_plaintext")
+    monkeypatch.setattr(admin_auth, "APP_ENVIRONMENT", "development")
+    monkeypatch.setattr(admin_auth, "ADMIN_USERNAME", "admin_1")
+    monkeypatch.setattr(admin_auth, "ADMIN_PASSWORD", "local-test-password")
+
+    assert admin_auth.admin_usernames() == ["admin_1"]
+    assert admin_auth.verify_admin_credentials("admin_1", "local-test-password")
+    assert not admin_auth.verify_admin_credentials("admin_1", "wrong-password")
+    admin_auth.ensure_auth_request_allowed("127.0.0.1")
+    with pytest.raises(admin_auth.LocalPlaintextAuthDenied):
+        admin_auth.ensure_auth_request_allowed("203.0.113.10")
+
+    token = admin_auth.create_access_token("admin_1")
+    assert admin_auth.verify_access_token(token) == "admin_1"
+
+    monkeypatch.setattr(admin_auth, "APP_ENVIRONMENT", "production")
+    with pytest.raises(admin_auth.AuthConfigurationError):
+        admin_auth.admin_usernames()
+
+
+def test_local_plaintext_auth_rejects_non_loopback_login_client(monkeypatch):
+    monkeypatch.setattr(admin_auth, "ADMIN_AUTH_MODE", "local_plaintext")
+    monkeypatch.setattr(admin_auth, "APP_ENVIRONMENT", "development")
+    monkeypatch.setattr(admin_auth, "ADMIN_USERNAME", "admin_1")
+    monkeypatch.setattr(admin_auth, "ADMIN_PASSWORD", "local-test-password")
+
+    response = TestClient(app).get("/auth/users")
+
+    assert response.status_code == 403
 
 
 def test_health():
