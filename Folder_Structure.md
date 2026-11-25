@@ -63,6 +63,30 @@ Credit_Risk/
 |       |-- threshold_comparison.csv          # Metrics for each requested threshold
 |       |-- precision_recall_curve.csv        # Curve coordinates for diagnostic validation
 |       `-- precision_recall_curve.svg        # Precision-recall curve with cutoff markers
+|-- fine_tuning/
+|   |-- 01_data_split.ipynb                  # Reproducible stratified V2 data split
+|   |-- 02_feature_engineering_review.ipynb  # Audit derived V2 features
+|   |-- 03_preprocessing_and_feature_selection.ipynb # Preprocessing and SHAP feature selection
+|   |-- 04_model_training.ipynb               # Compare XGBoost, LightGBM, and CatBoost
+|   |-- 05_model_evaluation.ipynb              # Cross-validation, test, and OOF threshold analysis
+|   |-- 06_reference_state.ipynb               # Build V2 feature reference distributions
+|   |-- feature_engineering.py                 # Shared V2 derived-feature formulas
+|   |-- data_splits/
+|   |   |-- train.csv                         # 70% labeled training partition
+|   |   |-- validation.csv                    # 15% labeled validation partition
+|   |   |-- test.csv                          # 15% labeled held-out test partition
+|   |   `-- split_metadata.json                # Split proportions, seed, and partition checks
+|   `-- artifacts/
+|       |-- feature_selection_config.json     # Full 129- and reduced 108-feature sets
+|       |-- feature_experiment_results.csv    # Early feature-set experiment results
+|       |-- feature_set_cv_comparison.csv     # Five-fold full-vs-reduced comparison
+|       |-- cv_fold_assignments.csv            # Reproducible development-fold membership
+|       |-- v2_shap_feature_ranking.csv        # Global source-feature SHAP ranking
+|       |-- v2_model_metrics.json              # V2 held-out test ROC-AUC and average precision
+|       |-- v2_xgboost_model.joblib            # Saved V2 XGBoost model
+|       |-- v2_preprocessor.joblib             # Saved V2 preprocessing pipeline
+|       |-- v2_reference_state.json            # V2 reference distributions for future monitoring
+|       `-- v2_oof_predictions.csv             # OOF probabilities, created by Notebook 05 threshold analysis
 |-- .gitattributes                          # Git file-handling rules
 |-- .gitignore                              # Files and generated artifacts excluded from Git
 |-- data_summary.txt                        # Dataset notes and summary
@@ -117,6 +141,25 @@ predictions from the same saved model and exact diagnostic partitions. It picks
 a candidate only from diagnostic-validation F1 and evaluates that candidate
 once on the secondary subset as a provisional check. It does not overwrite the
 baseline evaluation outputs or define an approved business threshold.
+
+The separate `fine_tuning/` workflow trains V2 from stratified partitions of
+the labeled `data/application_train.csv` dataset. Notebook 05 compares the
+129-feature and 108-feature candidates with five-fold cross-validation, fits
+the final V2 XGBoost model on the combined training and validation partitions,
+and reports performance on the untouched test partition. The saved model uses
+the full 129-feature set; its preprocessor produces 321 transformed inputs.
+Notebook 05 also generates out-of-fold predictions on development data and
+compares thresholds from 0.05 through 0.50 using F2. The threshold ranking and
+provisional F2-optimal candidate appear in the notebook output, while OOF
+probabilities are saved as `fine_tuning/artifacts/v2_oof_predictions.csv`
+when analysis completes. These development results do not replace held-out
+test evaluation or establish an approved lending threshold.
+
+V2's model and preprocessor are separate from the API for now: the backend
+still loads V1 artifacts from `models/`. V2's metrics, feature ranking, and
+reference state therefore do not describe the model currently serving
+predictions. The V2 reference state is prepared for future monitoring; drift
+detection is not implemented.
 
 Generated environments and caches (for example `.venv/`, `__pycache__/`, and
 `.git/`) are intentionally omitted from this guide.
